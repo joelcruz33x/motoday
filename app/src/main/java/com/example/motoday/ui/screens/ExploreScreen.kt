@@ -15,6 +15,7 @@ import androidx.navigation.NavController
 import androidx.compose.ui.platform.LocalContext
 import com.example.motoday.data.local.AppDatabase
 import com.example.motoday.navigation.Screen
+import com.example.motoday.ui.components.BottomNavigationBar
 import java.text.SimpleDateFormat
 import java.util.*
 

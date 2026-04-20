@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.navigation.NavController
+import com.example.motoday.ui.components.BottomNavigationBar
 import coil.compose.AsyncImage
 import com.example.motoday.data.local.AppDatabase
 import com.example.motoday.data.local.entities.UserEntity

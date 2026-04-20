@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.example.motoday.data.local.AppDatabase
+import com.example.motoday.ui.components.BottomNavigationBar
 import com.example.motoday.ui.utils.MaintenanceChecker
 import com.example.motoday.navigation.Screen
 
@@ -287,39 +288,5 @@ fun StoryCircle(name: String, isMe: Boolean) {
             }
         }
         Text(text = name, fontSize = 11.sp, fontWeight = if (isMe) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.padding(top = 4.dp))
-    }
-}
-
-@Composable
-fun BottomNavigationBar(navController: NavController) {
-    NavigationBar(
-        containerColor = MaterialTheme.colorScheme.surface,
-        tonalElevation = 8.dp
-    ) {
-        val currentRoute = navController.currentBackStackEntry?.destination?.route
-        
-        val items = listOf(
-            Triple(Screen.Home.route, Icons.Default.Home, "Inicio"),
-            Triple(Screen.Explore.route, Icons.Default.Search, "Explorar"),
-            Triple(Screen.Groups.route, Icons.Default.Menu, "Grupos"),
-            Triple(Screen.Profile.route, Icons.Default.Person, "Perfil")
-        )
-
-        items.forEach { (route, icon, label) ->
-            NavigationBarItem(
-                icon = { Icon(icon, contentDescription = label) },
-                label = { Text(label) },
-                selected = currentRoute == route,
-                onClick = { 
-                    if (currentRoute != route) {
-                        navController.navigate(route) {
-                            popUpTo(Screen.Home.route) { saveState = true }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    }
-                }
-            )
-        }
     }
 }

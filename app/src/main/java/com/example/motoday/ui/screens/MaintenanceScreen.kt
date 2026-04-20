@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import com.example.motoday.ui.components.BottomNavigationBar
 import com.example.motoday.data.local.AppDatabase
 import com.example.motoday.data.local.entities.MaintenanceEntity
 import com.example.motoday.data.local.entities.UserEntity
