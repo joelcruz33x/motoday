@@ -8,13 +8,25 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.motoday.ui.screens.*
 
+import com.google.firebase.auth.FirebaseAuth
+
 @Composable
 fun AppNavigation() {
     val navController = rememberNavController()
+    val auth = FirebaseAuth.getInstance()
     
-    NavHost(navController = navController, startDestination = Screen.Welcome.route) {
+    // Si el usuario ya está logueado, vamos directo a Home, si no a Welcome
+    val startDest = if (auth.currentUser != null) Screen.Home.route else Screen.Welcome.route
+    
+    NavHost(navController = navController, startDestination = startDest) {
         composable(Screen.Welcome.route) {
             WelcomeScreen(navController)
+        }
+        composable(Screen.Login.route) {
+            LoginScreen(navController)
+        }
+        composable(Screen.Register.route) {
+            RegisterScreen(navController)
         }
         composable(Screen.Home.route) {
             HomeScreen(navController)

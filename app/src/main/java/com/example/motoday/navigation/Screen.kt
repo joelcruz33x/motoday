@@ -3,6 +3,8 @@ package com.example.motoday.navigation
 sealed class Screen(val route: String) {
     object Home : Screen("home")
     object Welcome : Screen("welcome")
+    object Login : Screen("login")
+    object Register : Screen("register")
     object Explore : Screen("explore")
     object Groups : Screen("groups")
     object Profile : Screen("profile")
