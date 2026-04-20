@@ -22,7 +22,10 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.example.motoday.data.local.AppDatabase
+import com.example.motoday.data.local.entities.PassportStampEntity
 import com.example.motoday.data.local.entities.RideEntity
+import com.example.motoday.data.local.entities.UserEntity
+import kotlin.math.*
 import com.example.motoday.data.network.WeatherApiService
 import com.example.motoday.data.network.model.WeatherResponse
 import com.example.motoday.ui.utils.NotificationHelper
@@ -211,13 +214,52 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                         Button(
                             onClick = {
                                 scope.launch {
+                                    // 1. Calcular distancia (Haversine formula para kms entre coordenadas)
+                                    val distanceKm = if (currentRide.startLat != 0.0 && currentRide.endLat != 0.0) {
+                                        calculateDistance(currentRide.startLat, currentRide.startLng, currentRide.endLat, currentRide.endLng).toInt()
+                                    } else 50 // Valor por defecto si no hay coordenadas
+
+                                    // 2. Finalizar ruta
                                     db.rideDao().updateRide(currentRide.copy(status = "COMPLETED"))
+                                    
+                                    // 3. Actualizar perfil de usuario (kms y rutas completadas)
                                     val user = db.userDao().getUserProfile().firstOrNull()
                                     user?.let {
-                                        db.userDao().insertOrUpdate(it.copy(ridesCompleted = it.ridesCompleted + 1))
-                                        NotificationHelper(context).showNewPassportStamp(currentRide.endLocation)
-                                        MaintenanceChecker(context).checkStatus()
+                                        val newKms = it.totalKilometers + distanceKm
+                                        val newRides = it.ridesCompleted + 1
+                                        
+                                        // Comprobar logros para notificaciones
+                                        val notifier = NotificationHelper(context)
+                                        if (newRides == 1) notifier.showAchievementUnlocked("Bautizo de Asfalto", "¡Has completado tu primera rodada!")
+                                        if (it.totalKilometers < 500 && newKms >= 500) notifier.showAchievementUnlocked("Tragakilómetros", "¡Has superado los 500km totales!")
+                                        
+                                        db.userDao().insertOrUpdate(it.copy(
+                                            ridesCompleted = newRides,
+                                            totalKilometers = newKms
+                                        ))
                                     }
+
+                                    // 4. Añadir sello al pasaporte
+                                    val stamps = db.passportDao().getAllStamps().firstOrNull() ?: emptyList()
+                                    val citiesVisited = stamps.distinctBy { it.locationName.lowercase() }.size
+                                    
+                                    db.passportDao().insertStamp(
+                                        PassportStampEntity(
+                                            rideId = currentRide.id,
+                                            rideTitle = currentRide.title,
+                                            date = System.currentTimeMillis(),
+                                            locationName = currentRide.endLocation
+                                        )
+                                    )
+                                    
+                                    // Notificación por visitar nuevas ciudades
+                                    if (citiesVisited == 2 && !stamps.any { it.locationName.lowercase() == currentRide.endLocation.lowercase() }) {
+                                        NotificationHelper(context).showAchievementUnlocked("Explorador Regional", "¡Has visitado 3 ciudades diferentes!")
+                                    }
+
+                                    // 5. Notificaciones y mantenimiento
+                                    NotificationHelper(context).showNewPassportStamp(currentRide.endLocation)
+                                    MaintenanceChecker(context).checkStatus()
                                 }
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -232,6 +274,17 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
     } ?: Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         CircularProgressIndicator()
     }
+}
+
+fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    val r = 6371 // Radio de la Tierra en km
+    val dLat = Math.toRadians(lat2 - lat1)
+    val dLon = Math.toRadians(lon2 - lon1)
+    val a = sin(dLat / 2) * sin(dLat / 2) +
+            cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) *
+            sin(dLon / 2) * sin(dLon / 2)
+    val c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    return r * c
 }
 
 @Composable
