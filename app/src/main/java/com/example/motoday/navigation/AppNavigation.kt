@@ -12,7 +12,10 @@ import com.example.motoday.ui.screens.*
 fun AppNavigation() {
     val navController = rememberNavController()
     
-    NavHost(navController = navController, startDestination = Screen.Home.route) {
+    NavHost(navController = navController, startDestination = Screen.Welcome.route) {
+        composable(Screen.Welcome.route) {
+            WelcomeScreen(navController)
+        }
         composable(Screen.Home.route) {
             HomeScreen(navController)
         }

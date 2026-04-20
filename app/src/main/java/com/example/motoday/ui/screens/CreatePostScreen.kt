@@ -116,6 +116,7 @@ fun CreatePostScreen(navController: NavController) {
                             scope.launch {
                                 val newPost = PostEntity(
                                     username = userProfile?.name ?: "Motero",
+                                    userProfilePic = userProfile?.profilePictureUri,
                                     content = content,
                                     timestamp = System.currentTimeMillis(),
                                     imageUris = selectedImages.joinToString(",") { it.toString() }
@@ -150,7 +151,16 @@ fun CreatePostScreen(navController: NavController) {
                     modifier = Modifier.size(45.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    if (userProfile?.profilePictureUri != null) {
+                        AsyncImage(
+                            model = userProfile?.profilePictureUri,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    }
                 }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {

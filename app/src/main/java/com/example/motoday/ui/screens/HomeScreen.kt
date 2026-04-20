@@ -1,8 +1,16 @@
 package com.example.motoday.ui.screens
 
 import android.text.format.DateUtils
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import com.example.motoday.data.local.entities.StoryEntity
+import kotlinx.coroutines.launch
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -38,6 +46,7 @@ fun HomeScreen(navController: NavController) {
     val context = LocalContext.current
     val db = AppDatabase.getDatabase(context)
     val posts by db.postDao().getAllPosts().collectAsState(initial = emptyList())
+    val userProfile by db.userDao().getUserProfile().collectAsState(initial = null)
 
     // REVISAR MANTENIMIENTO al abrir la app
     val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -84,7 +93,7 @@ fun HomeScreen(navController: NavController) {
                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
                 .padding(padding)
         ) {
-            item { StoriesSection() }
+            item { StoriesSection(userProfile?.profilePictureUri) }
 
             if (posts.isEmpty()) {
                 item {
@@ -103,6 +112,7 @@ fun HomeScreen(navController: NavController) {
             items(posts) { post ->
                 PostItem(
                     username = post.username,
+                    userProfilePic = post.userProfilePic,
                     content = post.content,
                     timestamp = post.timestamp,
                     imageUris = post.imageUris
@@ -113,7 +123,7 @@ fun HomeScreen(navController: NavController) {
 }
 
 @Composable
-fun PostItem(username: String, content: String, timestamp: Long, imageUris: String) {
+fun PostItem(username: String, userProfilePic: String?, content: String, timestamp: Long, imageUris: String) {
     val timeAgo = DateUtils.getRelativeTimeSpanString(
         timestamp,
         System.currentTimeMillis(),
@@ -142,7 +152,16 @@ fun PostItem(username: String, content: String, timestamp: Long, imageUris: Stri
                         .background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    if (userProfilePic != null) {
+                        AsyncImage(
+                            model = userProfilePic,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    }
                 }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
@@ -244,49 +263,256 @@ fun PostIcon(imageVector: ImageVector, contentDescription: String?, size: androi
 }
 
 @Composable
-fun StoriesSection() {
+fun StoriesSection(myProfilePic: String?) {
+    val context = LocalContext.current
+    val db = AppDatabase.getDatabase(context)
+    val allStories by db.storyDao().getActiveStories(System.currentTimeMillis()).collectAsState(initial = emptyList())
+    val userProfile by db.userDao().getUserProfile().collectAsState(initial = null)
+    val scope = rememberCoroutineScope()
+    
+    // Identificador del usuario actual
+    val myCurrentName = userProfile?.name ?: "Motero"
+    
+    // Agrupar historias por usuario, unificando "Motero" con tu nombre actual
+    val groupedStories = remember(allStories, myCurrentName) {
+        allStories.groupBy { 
+            if (it.username == "Motero") myCurrentName else it.username 
+        }
+    }
+    
+    var selectedUserStories by remember { mutableStateOf<List<StoryEntity>?>(null) }
+    
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(),
+        onResult = { uris ->
+            uris.forEach { uri ->
+                scope.launch {
+                    val newStory = StoryEntity(
+                        username = myCurrentName,
+                        userProfilePic = userProfile?.profilePictureUri,
+                        imageUri = uri.toString()
+                    )
+                    db.storyDao().insertStory(newStory)
+                }
+            }
+        }
+    )
+
     Column(modifier = Modifier.padding(vertical = 12.dp)) {
         LazyRow(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(8) { index ->
-                StoryCircle(name = if (index == 0) "Tú" else "Motero_$index", isMe = index == 0)
+            // Círculo para "Tú" - Agrupa todas tus historias sin importar cambios de perfil
+            item {
+                val myStories = groupedStories[myCurrentName] ?: emptyList()
+                StoryCircle(
+                    name = "Tú",
+                    isMe = true,
+                    // Prioridad: 1. Foto de perfil, 2. Imagen de la historia, 3. Null (icono person)
+                    imageUri = myProfilePic ?: myStories.firstOrNull()?.imageUri,
+                    hasStories = myStories.isNotEmpty(),
+                    onClick = {
+                        if (myStories.isNotEmpty()) {
+                            selectedUserStories = myStories
+                        } else {
+                            launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        }
+                    },
+                    onAddClick = { launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+                )
+            }
+
+            // Historias de otros moteros (excluyendo la burbuja de "Tú")
+            items(groupedStories.filterKeys { it != myCurrentName }.toList()) { (username, userStories) ->
+                StoryCircle(
+                    name = username,
+                    isMe = false,
+                    imageUri = userStories.first().imageUri,
+                    hasStories = true,
+                    onClick = { selectedUserStories = userStories }
+                )
+            }
+        }
+    }
+
+    // Visor de Historias Avanzado
+    selectedUserStories?.let { stories ->
+        StoryViewer(
+            stories = stories,
+            onDismiss = { selectedUserStories = null }
+        )
+    }
+}
+
+@Composable
+fun StoryViewer(stories: List<StoryEntity>, onDismiss: () -> Unit) {
+    var currentIndex by remember { mutableIntStateOf(0) }
+    var progress by remember { mutableFloatStateOf(0f) }
+    val storyDuration = 5000L
+    
+    LaunchedEffect(currentIndex) {
+        progress = 0f
+        val startTime = System.currentTimeMillis()
+        while (progress < 1f) {
+            val elapsedTime = System.currentTimeMillis() - startTime
+            progress = elapsedTime.toFloat() / storyDuration
+            kotlinx.coroutines.delay(16)
+        }
+        if (currentIndex < stories.size - 1) {
+            currentIndex++
+        } else {
+            onDismiss()
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+            // 1. Imagen de la historia (Fondo)
+            AsyncImage(
+                model = stories[currentIndex].imageUri,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit
+            )
+            
+            // 2. Zonas de toque para navegación (Debajo de la UI de control)
+            Row(modifier = Modifier.fillMaxSize()) {
+                Box(modifier = Modifier.weight(1f).fillMaxHeight().clickable { 
+                    if (currentIndex > 0) currentIndex-- else onDismiss() 
+                })
+                Box(modifier = Modifier.weight(1f).fillMaxHeight().clickable { 
+                    if (currentIndex < stories.size - 1) currentIndex++ else onDismiss() 
+                })
+            }
+
+            // 3. UI de Control (Encima de todo para que la 'X' sea clickable)
+            Column {
+                // Barras de progreso
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp, start = 8.dp, end = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    stories.forEachIndexed { index, _ ->
+                        LinearProgressIndicator(
+                            progress = when {
+                                index < currentIndex -> 1f
+                                index == currentIndex -> progress
+                                else -> 0f
+                            },
+                            modifier = Modifier.weight(1f).height(2.dp).clip(RoundedCornerShape(1.dp)),
+                            color = Color.White,
+                            trackColor = Color.White.copy(alpha = 0.3f)
+                        )
+                    }
+                }
+
+                // Cabecera con info y BOTÓN CERRAR
+                Row(
+                    modifier = Modifier
+                        .padding(top = 8.dp, start = 16.dp, end = 8.dp)
+                        .fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(modifier = Modifier.size(36.dp).clip(CircleShape).background(Color.Gray)) {
+                        AsyncImage(model = stories[currentIndex].userProfilePic, contentDescription = null, contentScale = ContentScale.Crop)
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(stories[currentIndex].username, color = Color.White, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.weight(1f))
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.White, modifier = Modifier.size(28.dp))
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-fun StoryCircle(name: String, isMe: Boolean) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+fun StoryCircle(
+    name: String, 
+    isMe: Boolean, 
+    imageUri: String?, 
+    hasStories: Boolean,
+    onClick: () -> Unit,
+    onAddClick: (() -> Unit)? = null
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(horizontal = 4.dp)
+    ) {
         Box(
-            modifier = Modifier
-                .size(68.dp)
-                .border(
-                    width = 2.dp,
-                    brush = androidx.compose.ui.graphics.SolidColor(if (isMe) Color.LightGray else MaterialTheme.colorScheme.primary),
-                    shape = CircleShape
-                )
-                .padding(4.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+            modifier = Modifier.size(76.dp),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            // Círculo principal con imagen
+            Box(
+                modifier = Modifier
+                    .size(72.dp)
+                    .border(
+                        width = 2.dp,
+                        brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                            colors = if (hasStories) listOf(Color(0xFF00FFFF), Color(0xFF6200EE))
+                                     else listOf(Color.LightGray, Color.Gray)
+                        ),
+                        shape = CircleShape
+                    )
+                    .padding(4.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable { onClick() },
+                contentAlignment = Alignment.Center
+            ) {
+                if (imageUri != null) {
+                    AsyncImage(
+                        model = imageUri,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Person, 
+                        contentDescription = null, 
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+            }
+
+            // Botón de añadir fuera de la burbuja (estilo Instagram)
             if (isMe) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
+                        .padding(bottom = 2.dp, end = 2.dp)
+                        .size(24.dp)
                         .background(MaterialTheme.colorScheme.primary, CircleShape)
                         .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape)
-                        .size(20.dp),
+                        .clickable { onAddClick?.invoke() },
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
+                    Icon(
+                        Icons.Default.Add, 
+                        contentDescription = null, 
+                        modifier = Modifier.size(16.dp),
+                        tint = Color.White
+                    )
                 }
             }
         }
-        Text(text = name, fontSize = 11.sp, fontWeight = if (isMe) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.padding(top = 4.dp))
+        Text(
+            text = name, 
+            fontSize = 11.sp, 
+            fontWeight = if (isMe) FontWeight.Bold else FontWeight.Normal, 
+            modifier = Modifier.padding(top = 4.dp),
+            maxLines = 1
+        )
     }
 }

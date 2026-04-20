@@ -7,6 +7,7 @@ import androidx.room.PrimaryKey
 data class PostEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val username: String,
+    val userProfilePic: String? = null,
     val content: String,
     val timestamp: Long,
     val isSynced: Boolean = false,
