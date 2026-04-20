@@ -17,7 +17,7 @@ import com.example.motoday.data.local.entities.PostEntity
 import com.example.motoday.data.local.entities.RideEntity
 import com.example.motoday.data.local.entities.UserEntity
 
-@Database(entities = [PostEntity::class, RideEntity::class, UserEntity::class, ContactEntity::class, MaintenanceEntity::class, PassportStampEntity::class], version = 14)
+@Database(entities = [PostEntity::class, RideEntity::class, UserEntity::class, ContactEntity::class, MaintenanceEntity::class, PassportStampEntity::class], version = 15)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun postDao(): PostDao
     abstract fun rideDao(): RideDao

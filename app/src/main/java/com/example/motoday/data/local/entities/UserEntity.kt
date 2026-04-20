@@ -14,6 +14,7 @@ data class UserEntity(
     val bikeSpecs: String,
     val bikeYear: String,
     val bikeColor: String,
+    val bikeStatus: String = "Excelente",
     val totalKilometers: Int = 0,
     val medalsCount: Int = 0,
     val ridesCompleted: Int = 0,

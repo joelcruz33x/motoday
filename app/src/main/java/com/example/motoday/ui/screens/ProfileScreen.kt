@@ -1,7 +1,6 @@
 package com.example.motoday.ui.screens
 
 import android.content.Intent
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.net.toUri
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.example.motoday.data.local.AppDatabase
@@ -101,7 +101,7 @@ fun ProfileScreen(navController: NavController) {
                     // Header
                     ProfileHeader(user, onImageSelected = { uriString ->
                         try {
-                            val uri = Uri.parse(uriString)
+                            val uri = uriString.toUri()
                             context.contentResolver.takePersistableUriPermission(
                                 uri,
                                 Intent.FLAG_GRANT_READ_URI_PERMISSION
@@ -129,7 +129,7 @@ fun ProfileScreen(navController: NavController) {
                     when (selectedTab) {
                         0 -> MyBikeSection(user, navController) { uriString ->
                             try {
-                                val uri = Uri.parse(uriString)
+                                val uri = uriString.toUri()
                                 context.contentResolver.takePersistableUriPermission(
                                     uri,
                                     Intent.FLAG_GRANT_READ_URI_PERMISSION
@@ -160,6 +160,7 @@ fun EditProfileForm(user: UserEntity, onSave: (UserEntity) -> Unit) {
     var bikeSpecs by remember { mutableStateOf(user.bikeSpecs) }
     var bikeYear by remember { mutableStateOf(user.bikeYear) }
     var bikeColor by remember { mutableStateOf(user.bikeColor) }
+    var bikeStatus by remember { mutableStateOf(user.bikeStatus) }
 
     LazyColumn(
         modifier = Modifier.padding(16.dp).fillMaxSize(),
@@ -174,6 +175,7 @@ fun EditProfileForm(user: UserEntity, onSave: (UserEntity) -> Unit) {
         item { OutlinedTextField(value = bikeSpecs, onValueChange = { bikeSpecs = it }, label = { Text("Especificaciones (cc, hp)") }, modifier = Modifier.fillMaxWidth()) }
         item { OutlinedTextField(value = bikeYear, onValueChange = { bikeYear = it }, label = { Text("Año") }, modifier = Modifier.fillMaxWidth()) }
         item { OutlinedTextField(value = bikeColor, onValueChange = { bikeColor = it }, label = { Text("Color") }, modifier = Modifier.fillMaxWidth()) }
+        item { OutlinedTextField(value = bikeStatus, onValueChange = { bikeStatus = it }, label = { Text("Estado de la Moto") }, modifier = Modifier.fillMaxWidth()) }
         
         item {
             Button(
@@ -183,7 +185,8 @@ fun EditProfileForm(user: UserEntity, onSave: (UserEntity) -> Unit) {
                         bikeModel = bikeModel,
                         bikeSpecs = bikeSpecs,
                         bikeYear = bikeYear,
-                        bikeColor = bikeColor
+                        bikeColor = bikeColor,
+                        bikeStatus = bikeStatus
                     ))
                 },
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp)
@@ -307,7 +310,7 @@ fun MyBikeSection(user: UserEntity, navController: NavController, onImageSelecte
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         BikeSpecItem("Motor", user.bikeSpecs.take(5))
                         BikeSpecItem("Año", user.bikeYear)
-                        BikeSpecItem("Estado", "Excelente")
+                        BikeSpecItem("Estado", user.bikeStatus)
                     }
                 }
             }
