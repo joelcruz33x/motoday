@@ -92,15 +92,7 @@ fun SettingsScreen(navController: NavController) {
                         title = "Editar Perfil de Moto",
                         subtitle = "Actualizar modelo, año y specs",
                         icon = Icons.Default.TwoWheeler,
-                        onClick = { /* Navegar a edición de perfil */ }
-                    )
-
-                    SettingsClickItem(
-                        title = "Borrar Historial de Rutas",
-                        subtitle = "Esta acción no se puede deshacer",
-                        icon = Icons.Default.DeleteForever,
-                        contentColor = MaterialTheme.colorScheme.error,
-                        onClick = { /* Lógica para borrar */ }
+                        onClick = { navController.navigate("profile") }
                     )
                 }
 
