@@ -30,8 +30,12 @@ import com.example.motoday.data.network.WeatherApiService
 import com.example.motoday.data.network.model.WeatherResponse
 import com.example.motoday.ui.utils.NotificationHelper
 import com.example.motoday.ui.utils.MaintenanceChecker
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import android.location.Geocoder
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -243,22 +247,47 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                                     val stamps = db.passportDao().getAllStamps().firstOrNull() ?: emptyList()
                                     val citiesVisited = stamps.distinctBy { it.locationName.lowercase() }.size
                                     
+                                    // Intentar detectar la ciudad real por coordenadas si el nombre es genérico
+                                    var detectedCity = currentRide.endLocation
+                                    if (detectedCity.contains("Ubicación", ignoreCase = true) && currentRide.endLat != 0.0) {
+                                        try {
+                                            val geocoder = Geocoder(context, Locale.getDefault())
+                                            val addresses = withContext(Dispatchers.IO) {
+                                                geocoder.getFromLocation(currentRide.endLat, currentRide.endLng, 1)
+                                            }
+                                            val city = addresses?.firstOrNull()?.locality ?: addresses?.firstOrNull()?.subAdminArea
+                                            if (city != null) detectedCity = city
+                                        } catch (e: Exception) {
+                                            e.printStackTrace()
+                                        }
+                                    }
+
+                                    val endLocationClean = detectedCity.trim().lowercase()
+                                    val iconName = when {
+                                        endLocationClean.contains("machala") -> "ic_stamp_machala"
+                                        endLocationClean.contains("guayaquil") -> "ic_stamp_guayaquil"
+                                        endLocationClean.contains("cuenca") -> "ic_stamp_cuenca"
+                                        endLocationClean.contains("quito") -> "ic_stamp_quito"
+                                        else -> "ic_stamp_default"
+                                    }
+
                                     db.passportDao().insertStamp(
                                         PassportStampEntity(
                                             rideId = currentRide.id,
                                             rideTitle = currentRide.title,
                                             date = System.currentTimeMillis(),
-                                            locationName = currentRide.endLocation
+                                            locationName = detectedCity,
+                                            iconResName = iconName
                                         )
                                     )
                                     
                                     // Notificación por visitar nuevas ciudades
-                                    if (citiesVisited == 2 && !stamps.any { it.locationName.lowercase() == currentRide.endLocation.lowercase() }) {
+                                    if (citiesVisited == 2 && !stamps.any { it.locationName.lowercase() == detectedCity.lowercase() }) {
                                         NotificationHelper(context).showAchievementUnlocked("Explorador Regional", "¡Has visitado 3 ciudades diferentes!")
                                     }
 
                                     // 5. Notificaciones y mantenimiento
-                                    NotificationHelper(context).showNewPassportStamp(currentRide.endLocation)
+                                    NotificationHelper(context).showNewPassportStamp(detectedCity)
                                     MaintenanceChecker(context).checkStatus()
                                 }
                             },

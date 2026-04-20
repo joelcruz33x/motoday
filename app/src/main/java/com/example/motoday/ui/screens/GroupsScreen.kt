@@ -25,6 +25,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.example.motoday.ui.components.BottomNavigationBar
@@ -34,7 +35,10 @@ data class ChatMessage(
     val sender: String,
     val message: String,
     val time: String,
-    val isMe: Boolean = false
+    val isMe: Boolean = false,
+    val imageUri: String? = null,
+    val fileUri: String? = null,
+    val fileName: String? = null
 )
 
 data class GroupInfo(
@@ -70,6 +74,25 @@ fun GroupsScreen(navController: NavController) {
     val chatMessages = remember { mutableStateListOf<ChatMessage>() }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    // Launchers para adjuntos
+    val imagePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            chatMessages.add(ChatMessage("Yo", "", "Ahora", true, imageUri = uri.toString()))
+            scope.launch { listState.animateScrollToItem(chatMessages.size - 1) }
+        }
+    }
+
+    val filePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            chatMessages.add(ChatMessage("Yo", "", "Ahora", true, fileUri = uri.toString(), fileName = "Documento.pdf"))
+            scope.launch { listState.animateScrollToItem(chatMessages.size - 1) }
+        }
+    }
 
     if (showCreateDialog) {
         CreateGroupDialog(
@@ -215,7 +238,9 @@ fun GroupsScreen(navController: NavController) {
                             chatMessages.add(ChatMessage("Yo", messageText, "Ahora", true))
                             messageText = ""
                             scope.launch { listState.animateScrollToItem(chatMessages.size - 1) }
-                        }
+                        },
+                        onImageAttach = { imagePicker.launch("image/*") },
+                        onFileAttach = { filePicker.launch("*/*") }
                     )
                 }
             }
@@ -270,7 +295,9 @@ fun ChatContent(
     listState: LazyListState,
     messageText: String,
     onMessageChange: (String) -> Unit,
-    onSend: () -> Unit
+    onSend: () -> Unit,
+    onImageAttach: () -> Unit,
+    onFileAttach: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
@@ -287,7 +314,34 @@ fun ChatContent(
                 modifier = Modifier.padding(8.dp).navigationBarsPadding().imePadding(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { }) { Icon(Icons.Default.AddCircleOutline, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                var showAttachMenu by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { showAttachMenu = true }) { 
+                        Icon(Icons.Outlined.AddCircleOutline, contentDescription = "Adjuntar", tint = MaterialTheme.colorScheme.primary) 
+                    }
+                    DropdownMenu(
+                        expanded = showAttachMenu,
+                        onDismissRequest = { showAttachMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Imagen") },
+                            onClick = {
+                                showAttachMenu = false
+                                onImageAttach()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Documento") },
+                            onClick = {
+                                showAttachMenu = false
+                                onFileAttach()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) }
+                        )
+                    }
+                }
+                
                 TextField(
                     value = messageText,
                     onValueChange = onMessageChange,
@@ -358,7 +412,43 @@ fun ChatBubble(msg: ChatMessage) {
             modifier = Modifier.widthIn(max = 280.dp)
         ) {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                Text(text = msg.message, color = textColor)
+                if (msg.imageUri != null) {
+                    AsyncImage(
+                        model = msg.imageUri,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 200.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+
+                if (msg.fileUri != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.Black.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                            .padding(8.dp)
+                    ) {
+                        Icon(Icons.Default.Description, contentDescription = null, tint = textColor)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = msg.fileName ?: "Archivo",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = textColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+
+                if (msg.message.isNotBlank()) {
+                    Text(text = msg.message, color = textColor)
+                }
                 Text(
                     text = msg.time,
                     style = MaterialTheme.typography.labelSmall,
@@ -430,29 +520,30 @@ fun EditGroupDialog(group: GroupInfo, onDismiss: () -> Unit, onUpdate: (String, 
 
 @Composable
 fun GroupIconCircle(group: GroupInfo, isSelected: Boolean, onClick: () -> Unit) {
-    Box(
+    Row(
         modifier = Modifier
-            .size(52.dp)
-            .padding(2.dp),
-        contentAlignment = Alignment.Center
+            .fillMaxWidth()
+            .height(52.dp)
+            .clickable { onClick() },
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        if (isSelected) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .width(4.dp)
-                    .height(32.dp)
-                    .clip(RoundedCornerShape(topEnd = 4.dp, bottomEnd = 4.dp))
-                    .background(MaterialTheme.colorScheme.primary)
-            )
-        }
+        // Indicador lateral izquierdo (la barrita)
+        Box(
+            modifier = Modifier
+                .width(4.dp)
+                .height(if (isSelected) 32.dp else 8.dp)
+                .clip(RoundedCornerShape(topEnd = 4.dp, bottomEnd = 4.dp))
+                .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
+        )
         
+        Spacer(modifier = Modifier.width(8.dp))
+        
+        // El icono o foto del grupo
         Box(
             modifier = Modifier
                 .size(48.dp)
                 .clip(if (isSelected) RoundedCornerShape(16.dp) else CircleShape)
-                .background(if (isSelected) group.color else group.color.copy(alpha = 0.7f))
-                .clickable { onClick() },
+                .background(if (isSelected) group.color else group.color.copy(alpha = 0.7f)),
             contentAlignment = Alignment.Center
         ) {
             if (group.photoUri != null) {

@@ -4,6 +4,8 @@ import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,7 +23,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -30,11 +35,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.navigation.NavController
-import com.example.motoday.ui.components.BottomNavigationBar
 import coil.compose.AsyncImage
 import com.example.motoday.data.local.AppDatabase
 import com.example.motoday.data.local.entities.UserEntity
 import com.example.motoday.navigation.Screen
+import com.example.motoday.ui.components.BottomNavigationBar
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -52,7 +57,6 @@ fun ProfileScreen(navController: NavController) {
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Mi Moto", "Pasaporte", "Logros", "Estadísticas")
 
-    // Si el usuario no existe, creamos uno por defecto la primera vez solo si la DB está vacía
     LaunchedEffect(Unit) {
         val current = db.userDao().getUserProfile().first()
         if (current == null) {
@@ -99,7 +103,6 @@ fun ProfileScreen(navController: NavController) {
                         }
                     }
                 } else {
-                    // Header
                     ProfileHeader(user, onImageSelected = { uriString ->
                         try {
                             val uri = uriString.toUri()
@@ -115,7 +118,6 @@ fun ProfileScreen(navController: NavController) {
                         }
                     })
 
-                    // Tabs
                     TabRow(selectedTabIndex = selectedTab) {
                         tabs.forEachIndexed { index, title ->
                             Tab(
@@ -126,7 +128,6 @@ fun ProfileScreen(navController: NavController) {
                         }
                     }
 
-                    // Content based on tab
                     when (selectedTab) {
                         0 -> MyBikeSection(user, navController) { uriString ->
                             try {
@@ -237,7 +238,6 @@ fun ProfileHeader(user: UserEntity, onImageSelected: (String) -> Unit) {
                 )
             }
             
-            // Overlay de edición
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -345,7 +345,6 @@ fun PassportSection() {
     val db = AppDatabase.getDatabase(context)
     val stamps by db.passportDao().getAllStamps().collectAsState(initial = emptyList())
     
-    // Agrupamos por ciudad para tener sellos únicos en el pasaporte principal
     val uniqueStamps = stamps.distinctBy { it.locationName.lowercase() }
 
     Column(modifier = Modifier.padding(16.dp).fillMaxSize()) {
@@ -373,40 +372,90 @@ fun PassportSection() {
 
 @Composable
 fun CityStamp(stamp: com.example.motoday.data.local.entities.PassportStampEntity) {
+    var isVisible by remember { mutableStateOf(false) }
+    
+    val scale by animateFloatAsState(
+        targetValue = if (isVisible) 1f else 3f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "scale"
+    )
+    val alpha by animateFloatAsState(
+        targetValue = if (isVisible) 1f else 0f,
+        animationSpec = tween(600),
+        label = "alpha"
+    )
+    val rotation by animateFloatAsState(
+        targetValue = if (isVisible) 0f else -25f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy),
+        label = "rotation"
+    )
+
+    // Configuración personalizada según el sello
+    val stampConfig = when (stamp.iconResName) {
+        "ic_stamp_machala" -> StampStyle(Color(0xFFFFD700), Icons.Default.Agriculture, "MACHALA") // Amarillo (Banano)
+        "ic_stamp_guayaquil" -> StampStyle(Color(0xFF00BFFF), Icons.Default.Anchor, "GUAYAQUIL") // Azul (Puerto)
+        "ic_stamp_cuenca" -> StampStyle(Color(0xFF8B4513), Icons.Default.Architecture, "CUENCA") // Café (Atenas del Ecuador)
+        "ic_stamp_quito" -> StampStyle(Color(0xFFD32F2F), Icons.Default.AccountBalance, "QUITO") // Rojo (Centro Histórico)
+        else -> StampStyle(Color(0xFF6200EE), Icons.Default.LocationCity, stamp.locationName.uppercase())
+    }
+
+    LaunchedEffect(Unit) {
+        isVisible = true
+    }
+
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier
-                .size(90.dp)
+                .size(95.dp)
+                .graphicsLayer(
+                    scaleX = scale,
+                    scaleY = scale,
+                    alpha = alpha,
+                    rotationZ = rotation
+                )
                 .clip(CircleShape)
-                .background(Color(0xFFF5F5F5))
-                .border(2.dp, Color(0xFF6200EE).copy(alpha = 0.3f), CircleShape)
+                .background(Color(0xFFFDF5E6))
+                .border(2.dp, stampConfig.color.copy(alpha = 0.4f), CircleShape)
                 .padding(8.dp),
             contentAlignment = Alignment.Center
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(
-                    Icons.Default.LocationCity,
+                    stampConfig.icon,
                     contentDescription = null,
-                    tint = Color(0xFF6200EE).copy(alpha = 0.6f),
+                    tint = stampConfig.color.copy(alpha = 0.7f),
                     modifier = Modifier.size(24.dp)
                 )
                 Text(
-                    text = stamp.locationName.take(10),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF6200EE),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    text = stampConfig.label,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        shadow = Shadow(color = Color.Black.copy(alpha = 0.15f), offset = Offset(2f, 2f), blurRadius = 3f)
+                    ),
+                    color = stampConfig.color.copy(alpha = 0.9f),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    maxLines = 1,
+                    fontSize = 9.sp
                 )
+                
+                val dateStr = try {
+                    SimpleDateFormat("dd/MM/yy", Locale.getDefault()).format(Date(stamp.date))
+                } catch (e: Exception) {
+                    "Reciente"
+                }
+                
                 Text(
-                    text = SimpleDateFormat("yyyy", Locale.getDefault()).format(Date(stamp.date)),
+                    text = dateStr,
                     style = MaterialTheme.typography.labelSmall,
                     fontSize = 8.sp,
-                    color = Color.Gray
+                    color = Color.Gray.copy(alpha = 0.8f)
                 )
             }
         }
     }
 }
+
+data class StampStyle(val color: Color, val icon: ImageVector, val label: String)
 
 @Composable
 fun AchievementsSection(user: UserEntity) {
@@ -522,8 +571,22 @@ fun StatsSection(user: UserEntity) {
 
 @Composable
 fun AchievementItem(title: String, desc: String, isUnlocked: Boolean) {
+    var isVisible by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (isVisible && isUnlocked) 1f else 0.8f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "achScale"
+    )
+
+    LaunchedEffect(isUnlocked) {
+        if (isUnlocked) isVisible = true
+    }
+
     Card(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .graphicsLayer(scaleX = scale, scaleY = scale),
         colors = CardDefaults.cardColors(
             containerColor = if (isUnlocked) Color(0xFF00FFFF).copy(alpha = 0.1f) else Color.Gray.copy(alpha = 0.05f)
         )

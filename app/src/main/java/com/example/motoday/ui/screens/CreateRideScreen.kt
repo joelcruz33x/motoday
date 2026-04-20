@@ -210,7 +210,7 @@ fun CreateRideScreen(navController: NavController) {
             OutlinedTextField(
                 value = scheduledStops,
                 onValueChange = { scheduledStops = it },
-                label = { Text("Paradas Programadas (opcional)") },
+                label = { Text("Paradas Programadas (separadas por coma)") },
                 placeholder = { Text("Mirador de Turi, Paute, Gualaceo...") },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 2
