@@ -49,8 +49,8 @@ fun HomeScreen(navController: NavController) {
     val userProfile by db.userDao().getUserProfile().collectAsState(initial = null)
 
     // REVISAR MANTENIMIENTO al abrir la app
-    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
     ) { _ -> }
 
     LaunchedEffect(Unit) {
@@ -255,7 +255,7 @@ fun PostItem(username: String, userProfilePic: String?, content: String, timesta
 // Helper para iconos con tamaño manual
 @Composable
 fun PostIcon(imageVector: ImageVector, contentDescription: String?, size: androidx.compose.ui.unit.Dp) {
-    androidx.compose.material3.Icon(
+    Icon(
         imageVector = imageVector,
         contentDescription = contentDescription,
         modifier = Modifier.size(size)
