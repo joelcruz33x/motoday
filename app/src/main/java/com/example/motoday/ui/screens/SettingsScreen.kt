@@ -16,6 +16,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.motoday.data.local.AppDatabase
+import com.example.motoday.data.remote.AuthManager
+import com.example.motoday.navigation.Screen
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -25,6 +27,7 @@ fun SettingsScreen(navController: NavController) {
     val context = LocalContext.current
     val db = AppDatabase.getDatabase(context)
     val scope = rememberCoroutineScope()
+    val authManager = remember { AuthManager(context) }
     
     val userProfile by db.userDao().getUserProfile().collectAsState(initial = null)
 
@@ -93,6 +96,21 @@ fun SettingsScreen(navController: NavController) {
                         subtitle = "Actualizar modelo, año y specs",
                         icon = Icons.Default.TwoWheeler,
                         onClick = { navController.navigate("profile") }
+                    )
+
+                    SettingsClickItem(
+                        title = "Cerrar Sesión",
+                        subtitle = "Salir de tu cuenta de Appwrite",
+                        icon = Icons.Default.Logout,
+                        contentColor = MaterialTheme.colorScheme.error,
+                        onClick = {
+                            scope.launch {
+                                authManager.logout()
+                                navController.navigate(Screen.Login.route) {
+                                    popUpTo(Screen.Home.route) { inclusive = true }
+                                }
+                            }
+                        }
                     )
                 }
 

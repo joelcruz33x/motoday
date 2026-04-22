@@ -174,7 +174,7 @@ fun EditProfileForm(user: UserEntity, onSave: (UserEntity) -> Unit) {
         item { Spacer(modifier = Modifier.height(16.dp)) }
         item { Text("Editar Información de la Moto", style = MaterialTheme.typography.titleMedium) }
         item { OutlinedTextField(value = bikeModel, onValueChange = { bikeModel = it }, label = { Text("Modelo de Moto") }, modifier = Modifier.fillMaxWidth()) }
-        item { OutlinedTextField(value = bikeSpecs, onValueChange = { bikeSpecs = it }, label = { Text("Especificaciones (cc, hp)") }, modifier = Modifier.fillMaxWidth()) }
+        item { OutlinedTextField(value = bikeSpecs, onValueChange = { bikeSpecs = it }, label = { Text("Cilindraje") }, modifier = Modifier.fillMaxWidth()) }
         item { OutlinedTextField(value = bikeYear, onValueChange = { bikeYear = it }, label = { Text("Año") }, modifier = Modifier.fillMaxWidth()) }
         item { OutlinedTextField(value = bikeColor, onValueChange = { bikeColor = it }, label = { Text("Color") }, modifier = Modifier.fillMaxWidth()) }
         item { OutlinedTextField(value = bikeStatus, onValueChange = { bikeStatus = it }, label = { Text("Estado de la Moto") }, modifier = Modifier.fillMaxWidth()) }

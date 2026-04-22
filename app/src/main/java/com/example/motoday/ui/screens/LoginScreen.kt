@@ -1,14 +1,10 @@
 package com.example.motoday.ui.screens
 
 import android.widget.Toast
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,14 +17,19 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.navigation.Screen
-import com.google.firebase.auth.FirebaseAuth
+import io.appwrite.exceptions.AppwriteException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(navController: NavController) {
     val context = LocalContext.current
-    val auth = FirebaseAuth.getInstance()
+    val appwrite = remember { AppwriteManager(context) }
+    val scope = rememberCoroutineScope()
     
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -49,7 +50,7 @@ fun LoginScreen(navController: NavController) {
             color = MaterialTheme.colorScheme.primary
         )
         Text(
-            text = "Inicia sesión para conectar con la comunidad",
+            text = "Inicia sesión con Appwrite",
             fontSize = 14.sp,
             color = Color.Gray,
             modifier = Modifier.padding(bottom = 32.dp)
@@ -90,17 +91,22 @@ fun LoginScreen(navController: NavController) {
             onClick = {
                 if (email.isNotBlank() && password.isNotBlank()) {
                     isLoading = true
-                    auth.signInWithEmailAndPassword(email, password)
-                        .addOnCompleteListener { task ->
-                            isLoading = false
-                            if (task.isSuccessful) {
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            appwrite.account.createEmailPasswordSession(email, password)
+                            withContext(Dispatchers.Main) {
+                                isLoading = false
                                 navController.navigate(Screen.Home.route) {
                                     popUpTo(Screen.Login.route) { inclusive = true }
                                 }
-                            } else {
-                                Toast.makeText(context, "Error: ${task.exception?.message}", Toast.LENGTH_LONG).show()
+                            }
+                        } catch (e: AppwriteException) {
+                            withContext(Dispatchers.Main) {
+                                isLoading = false
+                                Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
                             }
                         }
+                    }
                 }
             },
             modifier = Modifier

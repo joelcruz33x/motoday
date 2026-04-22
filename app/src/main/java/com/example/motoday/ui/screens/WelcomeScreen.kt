@@ -111,7 +111,7 @@ fun WelcomeScreen(navController: NavController) {
                     if (pagerState.currentPage < 3) {
                         scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
                     } else {
-                        navController.navigate(Screen.Home.route) {
+                        navController.navigate(Screen.Login.route) {
                             popUpTo(Screen.Welcome.route) { inclusive = true }
                         }
                     }
@@ -134,7 +134,7 @@ fun WelcomeScreen(navController: NavController) {
             if (pagerState.currentPage < 3) {
                 TextButton(
                     onClick = {
-                        navController.navigate(Screen.Home.route) {
+                        navController.navigate(Screen.Login.route) {
                             popUpTo(Screen.Welcome.route) { inclusive = true }
                         }
                     },
