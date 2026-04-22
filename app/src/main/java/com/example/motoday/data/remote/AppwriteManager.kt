@@ -69,7 +69,7 @@ class AppwriteManager(context: Context) {
         userName: String,
         userLevel: String,
         profilePic: String?,
-        imageUrl: String,
+        imageUrls: List<String>, // Cambiado a lista
         caption: String,
         timestamp: Long
     ) {
@@ -82,7 +82,7 @@ class AppwriteManager(context: Context) {
                 "userName" to userName,
                 "userLevel" to userLevel,
                 "profilePic" to (profilePic ?: ""),
-                "imageUrl" to imageUrl,
+                "imageUrl" to imageUrls, // Appwrite recibirá el array
                 "caption" to caption,
                 "timestamp" to timestamp
             )

@@ -6,12 +6,18 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -43,12 +49,22 @@ fun CreatePostScreen(navController: NavController) {
     val db = AppDatabase.getDatabase(context)
 
     var caption by remember { mutableStateOf("") }
-    var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
+    var selectedImages by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
 
+    val scrollState = rememberScrollState()
+
+    // Selector Múltiple (Máximo 3)
     val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia(),
-        onResult = { uri -> selectedImageUri = uri }
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 3),
+        onResult = { uris -> 
+            if (uris.size > 3) {
+                Toast.makeText(context, "Máximo 3 fotos permitidas", Toast.LENGTH_SHORT).show()
+                selectedImages = uris.take(3)
+            } else {
+                selectedImages = uris
+            }
+        }
     )
 
     Scaffold(
@@ -66,45 +82,71 @@ fun CreatePostScreen(navController: NavController) {
         Column(
             modifier = Modifier
                 .padding(padding)
-                .padding(16.dp)
-                .fillMaxSize(),
+                .fillMaxSize()
+                .imePadding()
+                .verticalScroll(scrollState)
+                .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Selector de Imagen
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(250.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.LightGray.copy(alpha = 0.3f))
-                    .clickable {
-                        launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                if (selectedImageUri != null) {
-                    AsyncImage(
-                        model = selectedImageUri,
-                        contentDescription = "Imagen seleccionada",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
+            // Contenedor de Imágenes Seleccionadas
+            if (selectedImages.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.LightGray.copy(alpha = 0.3f))
+                        .clickable {
+                            launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.AddPhotoAlternate,
-                            contentDescription = null,
-                            modifier = Modifier.size(48.dp),
-                            tint = Color.Gray
-                        )
-                        Text("Toca para añadir una foto de tu ruta", color = Color.Gray)
+                        Icon(Icons.Default.AddPhotoAlternate, null, modifier = Modifier.size(48.dp), tint = Color.Gray)
+                        Text("Añadir fotos de la ruta (Máx. 3)", color = Color.Gray)
+                    }
+                }
+            } else {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().height(200.dp)
+                ) {
+                    items(selectedImages) { uri ->
+                        Box(modifier = Modifier.width(150.dp).fillMaxHeight()) {
+                            AsyncImage(
+                                model = uri,
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                            IconButton(
+                                onClick = { selectedImages = selectedImages.filter { it != uri } },
+                                modifier = Modifier.align(Alignment.TopEnd).background(Color.Black.copy(alpha = 0.5f), CircleShape).size(24.dp)
+                            ) {
+                                Icon(Icons.Default.Close, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+                    if (selectedImages.size < 3) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .width(100.dp)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color.LightGray.copy(alpha = 0.3f))
+                                    .clickable { launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.AddPhotoAlternate, null, tint = Color.Gray)
+                            }
+                        }
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Caption
             OutlinedTextField(
                 value = caption,
                 onValueChange = { caption = it },
@@ -114,43 +156,44 @@ fun CreatePostScreen(navController: NavController) {
                 shape = RoundedCornerShape(12.dp)
             )
 
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(32.dp))
 
-            // Botón Publicar
             Button(
                 onClick = {
-                    if (selectedImageUri != null) {
+                    if (selectedImages.isNotEmpty()) {
                         isLoading = true
                         scope.launch(Dispatchers.IO) {
                             try {
-                                // 1. Obtener datos del usuario
                                 val userId = authManager.getCurrentUserId() ?: throw Exception("Usuario no identificado")
                                 val userLocal = db.userDao().getUserProfileOnce() 
                                 
-                                // 2. Procesar imagen
-                                val inputStream = context.contentResolver.openInputStream(selectedImageUri!!)
-                                val bytes = inputStream?.use { it.readBytes() } ?: throw Exception("No se pudo leer la imagen")
+                                val uploadedUrls = mutableListOf<String>()
 
-                                val fileName = "post_${userId}_${System.currentTimeMillis()}.jpg"
-                                val inputFile = InputFile.fromBytes(bytes, fileName, "image/jpeg")
+                                // Subir cada imagen
+                                selectedImages.forEachIndexed { index, uri ->
+                                    val inputStream = context.contentResolver.openInputStream(uri)
+                                    val bytes = inputStream?.use { it.readBytes() } ?: throw Exception("Error al leer imagen $index")
+                                    
+                                    val fileName = "post_${userId}_${System.currentTimeMillis()}_$index.jpg"
+                                    val inputFile = InputFile.fromBytes(bytes, fileName, "image/jpeg")
+                                    
+                                    val fileId = appwrite.uploadImage(inputFile)
+                                    uploadedUrls.add(appwrite.getImageUrl(fileId))
+                                }
 
-                                // 3. Subir Imagen al Storage
-                                val fileId = appwrite.uploadImage(inputFile)
-                                val imageUrl = appwrite.getImageUrl(fileId)
-
-                                // 4. Crear documento en la Database
+                                // Crear documento con el ARRAY de URLs
                                 appwrite.createPost(
                                     userId = userId,
                                     userName = userLocal?.name ?: "Motero",
                                     userLevel = userLocal?.level ?: "Novato",
                                     profilePic = userLocal?.profilePictureUri,
-                                    imageUrl = imageUrl,
+                                    imageUrls = uploadedUrls,
                                     caption = caption,
                                     timestamp = System.currentTimeMillis()
                                 )
 
                                 withContext(Dispatchers.Main) {
-                                    Toast.makeText(context, "¡Publicado con éxito!", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "¡Ruta publicada!", Toast.LENGTH_SHORT).show()
                                     navController.popBackStack()
                                 }
                             } catch (e: Exception) {
@@ -161,7 +204,7 @@ fun CreatePostScreen(navController: NavController) {
                             }
                         }
                     } else {
-                        Toast.makeText(context, "Selecciona una foto primero", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Añade al menos una foto", Toast.LENGTH_SHORT).show()
                     }
                 },
                 modifier = Modifier.fillMaxWidth().height(56.dp),
@@ -174,6 +217,7 @@ fun CreatePostScreen(navController: NavController) {
                     Text("Publicar en el Feed", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 }
             }
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
