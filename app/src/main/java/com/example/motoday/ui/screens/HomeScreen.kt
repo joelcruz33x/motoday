@@ -1,8 +1,15 @@
 package com.example.motoday.ui.screens
 
+import android.net.Uri
 import android.text.format.DateUtils
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -18,6 +25,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -28,8 +36,6 @@ import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.example.motoday.data.local.AppDatabase
 import com.example.motoday.data.remote.AppwriteManager
-import androidx.compose.animation.core.*
-import androidx.compose.ui.draw.scale
 import com.example.motoday.data.remote.AuthManager
 import com.example.motoday.ui.components.BottomNavigationBar
 import com.example.motoday.navigation.Screen
@@ -46,16 +52,31 @@ fun HomeScreen(navController: NavController) {
     val db = AppDatabase.getDatabase(context)
     
     var posts by remember { mutableStateOf<List<Document<Map<String, Any>>>>(emptyList()) }
+    var activeStories by remember { mutableStateOf<List<Document<Map<String, Any>>>>(emptyList()) }
+    var myGroupsMemberIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectedUserStories by remember { mutableStateOf<List<Document<Map<String, Any>>>?>(null) }
     var isRefreshing by remember { mutableStateOf(true) }
+    var isUploadingStory by remember { mutableStateOf(false) }
+    
     val userProfile by db.userDao().getUserProfile().collectAsState(initial = null)
     var currentUserId by remember { mutableStateOf("") }
 
-    fun loadPosts(showLoading: Boolean = true) {
+    fun loadData(showLoading: Boolean = true) {
         scope.launch {
             if (showLoading) isRefreshing = true
             try {
                 currentUserId = authManager.getCurrentUserId() ?: ""
                 posts = appwrite.getPosts()
+                
+                // Obtenemos los IDs de los miembros de mis grupos
+                myGroupsMemberIds = appwrite.getMyGroupsMemberIds(currentUserId)
+                
+                // Obtenemos todas las historias y filtramos por miembros de mis grupos
+                val allStories = appwrite.getActiveStories()
+                activeStories = allStories.filter { story ->
+                    val storyUserId = story.data["userId"] as? String
+                    storyUserId != null && (storyUserId == currentUserId || myGroupsMemberIds.contains(storyUserId))
+                }
             } catch (e: Exception) {
                 // Error log
             } finally {
@@ -65,8 +86,44 @@ fun HomeScreen(navController: NavController) {
     }
 
     LaunchedEffect(Unit) {
-        loadPosts()
+        loadData()
     }
+
+    val storyLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(),
+        onResult = { uris ->
+            if (uris.isNotEmpty()) {
+                isUploadingStory = true
+                scope.launch {
+                    try {
+                        uris.forEach { uri ->
+                            val inputStream = context.contentResolver.openInputStream(uri)
+                            val bytes = inputStream?.use { it.readBytes() } ?: throw Exception("Error al leer imagen")
+                            
+                            val fileName = "story_${currentUserId}_${System.currentTimeMillis()}.jpg"
+                            val inputFile = io.appwrite.models.InputFile.fromBytes(bytes, fileName, "image/jpeg")
+                            
+                            val fileId = appwrite.uploadImage(inputFile)
+                            val imageUrl = appwrite.getImageUrl(fileId)
+                            
+                            appwrite.createStory(
+                                userId = currentUserId,
+                                userName = userProfile?.name ?: "Motero",
+                                userProfilePic = userProfile?.profilePictureUri,
+                                imageUrl = imageUrl
+                            )
+                        }
+                        Toast.makeText(context, "¡Estados publicados! 🏍️", Toast.LENGTH_SHORT).show()
+                        loadData(showLoading = false)
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "Error al subir estados: ${e.message}", Toast.LENGTH_LONG).show()
+                    } finally {
+                        isUploadingStory = false
+                    }
+                }
+            }
+        }
+    )
 
     Scaffold(
         topBar = {
@@ -83,65 +140,175 @@ fun HomeScreen(navController: NavController) {
             ExtendedFloatingActionButton(
                 onClick = { navController.navigate(Screen.CreatePost.route) },
                 icon = { Icon(Icons.Default.Add, null) },
-                text = { Text("Nuevo Post") } // Corregido: Nuevo Post
+                text = { Text("Nuevo Post") }
             )
         },
         bottomBar = {
             BottomNavigationBar(navController)
         }
     ) { padding ->
-        if (isRefreshing) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                    .padding(padding)
-            ) {
-                item { StoriesSection(userProfile?.profilePictureUri) }
-
-                if (posts.isEmpty()) {
-                    item {
-                        Box(Modifier.fillMaxWidth().padding(top = 100.dp), contentAlignment = Alignment.Center) {
-                            Text("No hay posts todavía 🏍️", color = Color.Gray)
-                        }
-                    }
+        Box(modifier = Modifier.padding(padding).fillMaxSize()) {
+            if (isRefreshing) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
                 }
-
-                items(posts, key = { it.id }) { post ->
-                    val data = post.data
-                    val likes = (data["likes"] as? List<String>) ?: emptyList()
-                    
-                    // Conversión segura de Number (Double o Long) a Long
-                    val rawTimestamp = data["timestamp"]
-                    val timestamp = when (rawTimestamp) {
-                        is Number -> rawTimestamp.toLong()
-                        else -> System.currentTimeMillis()
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                ) {
+                    item { 
+                        StoriesSection(
+                            myProfilePic = userProfile?.profilePictureUri,
+                            activeStories = activeStories,
+                            currentUserId = currentUserId,
+                            onAddStoryClick = { storyLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                            onSeeStoriesClick = { stories -> selectedUserStories = stories },
+                            isUploading = isUploadingStory
+                        ) 
                     }
 
-                    PostItem(
-                        username = data["userName"] as? String ?: "Motero",
-                        userLevel = data["userLevel"] as? String ?: "Novato",
-                        userProfilePic = data["profilePic"] as? String,
-                        content = data["caption"] as? String ?: "",
-                        timestamp = timestamp,
-                        imageUrls = (data["imageUrl"] as? List<String>) ?: emptyList(),
-                        likesCount = likes.size,
-                        isLiked = likes.contains(currentUserId),
-                        onLikeClick = {
-                            scope.launch {
-                                // Actualización silenciosa (sin pantalla de carga)
-                                appwrite.toggleLike(post.id, currentUserId, likes)
-                                loadPosts(showLoading = false) 
+                    if (posts.isEmpty()) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(top = 100.dp), contentAlignment = Alignment.Center) {
+                                Text("No hay posts todavía 🏍️", color = Color.Gray)
                             }
                         }
+                    }
+
+                    items(posts, key = { it.id }) { post ->
+                        val data = post.data
+                        val likes = (data["likes"] as? List<String>) ?: emptyList()
+                        val rawTimestamp = data["timestamp"]
+                        val timestamp = when (rawTimestamp) {
+                            is Number -> rawTimestamp.toLong()
+                            else -> System.currentTimeMillis()
+                        }
+
+                        PostItem(
+                            username = data["userName"] as? String ?: "Motero",
+                            userLevel = data["userLevel"] as? String ?: "Novato",
+                            userProfilePic = data["profilePic"] as? String,
+                            content = data["caption"] as? String ?: "",
+                            timestamp = timestamp,
+                            imageUrls = (data["imageUrl"] as? List<String>) ?: emptyList(),
+                            likesCount = likes.size,
+                            isLiked = likes.contains(currentUserId),
+                            onLikeClick = {
+                                scope.launch {
+                                    appwrite.toggleLike(post.id, currentUserId, likes)
+                                    loadData(showLoading = false) 
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+
+            // Overlay para el visor de historias (Nivel superior)
+            selectedUserStories?.let { stories ->
+                StoryViewerScreen(
+                    stories = stories,
+                    onClose = { selectedUserStories = null }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun StoriesSection(
+    myProfilePic: String?, 
+    activeStories: List<Document<Map<String, Any>>>,
+    currentUserId: String,
+    onAddStoryClick: () -> Unit,
+    onSeeStoriesClick: (List<Document<Map<String, Any>>>) -> Unit,
+    isUploading: Boolean
+) {
+    val groupedStories = activeStories.groupBy { it.data["userId"] as String }
+
+    Column(modifier = Modifier.padding(vertical = 12.dp)) {
+        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            item { 
+                StoryCircle(
+                    name = "Tú", 
+                    isMe = true, 
+                    imageUri = myProfilePic, 
+                    hasStories = groupedStories.containsKey(currentUserId),
+                    isUploading = isUploading,
+                    onAddClick = onAddStoryClick,
+                    onSeeClick = { groupedStories[currentUserId]?.let { onSeeStoriesClick(it) } }
+                ) 
+            }
+            
+            groupedStories.filter { it.key != currentUserId }.forEach { (userId, stories) ->
+                val firstStory = stories.first().data
+                item {
+                    StoryCircle(
+                        name = firstStory["userName"] as? String ?: "Motero",
+                        isMe = false,
+                        imageUri = firstStory["userProfilePic"] as? String,
+                        hasStories = true,
+                        onAddClick = {},
+                        onSeeClick = { onSeeStoriesClick(stories) }
                     )
                 }
             }
         }
+    }
+}
+
+@Composable
+fun StoryCircle(
+    name: String, 
+    isMe: Boolean, 
+    imageUri: String?, 
+    hasStories: Boolean,
+    isUploading: Boolean = false,
+    onAddClick: () -> Unit,
+    onSeeClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally, 
+        modifier = Modifier
+            .padding(horizontal = 4.dp)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier
+                    .size(70.dp)
+                    .border(2.dp, if (hasStories) Color(0xFF6200EE) else Color.LightGray, CircleShape)
+                    .padding(3.dp)
+                    .clip(CircleShape)
+                    .background(Color.White)
+                    .clickable { if (hasStories) onSeeClick() },
+                contentAlignment = Alignment.Center
+            ) {
+                if (isUploading) {
+                    CircularProgressIndicator(modifier = Modifier.size(30.dp), strokeWidth = 2.dp)
+                } else if (imageUri != null) {
+                    AsyncImage(model = imageUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                } else {
+                    Icon(Icons.Default.Person, null, modifier = Modifier.fillMaxSize().padding(10.dp), tint = Color.Gray)
+                }
+            }
+            
+            if (isMe) {
+                Box(
+                    modifier = Modifier
+                        .size(22.dp)
+                        .align(Alignment.BottomEnd)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                        .border(2.dp, Color.White, CircleShape)
+                        .clickable { onAddClick() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Add, null, tint = Color.White, modifier = Modifier.size(14.dp))
+                }
+            }
+        }
+        Text(text = name, fontSize = 11.sp, maxLines = 1, modifier = Modifier.padding(top = 4.dp))
     }
 }
 
@@ -157,11 +324,9 @@ fun PostItem(
     isLiked: Boolean,
     onLikeClick: () -> Unit
 ) {
-    // Estado local para respuesta inmediata
     var localIsLiked by remember(isLiked) { mutableStateOf(isLiked) }
     var localLikesCount by remember(likesCount) { mutableStateOf(likesCount) }
 
-    // Animación de latido
     val scale by animateFloatAsState(
         targetValue = if (localIsLiked) 1.2f else 1.0f,
         animationSpec = spring(
@@ -171,7 +336,6 @@ fun PostItem(
         label = "LikeAnimation"
     )
 
-    // Cálculo de tiempo real (hace cuánto fue publicado)
     val timeAgo = DateUtils.getRelativeTimeSpanString(
         timestamp,
         System.currentTimeMillis(),
@@ -188,7 +352,6 @@ fun PostItem(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // Header
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(modifier = Modifier.size(42.dp).clip(CircleShape).background(Color.LightGray)) {
                     if (!userProfilePic.isNullOrEmpty()) {
@@ -214,7 +377,6 @@ fun PostItem(
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
-            // Carrusel de imágenes
             if (imageUrls.isNotEmpty()) {
                 Box(modifier = Modifier.fillMaxWidth().height(300.dp).clip(RoundedCornerShape(12.dp))) {
                     if (imageUrls.size == 1) {
@@ -234,7 +396,6 @@ fun PostItem(
             
             Row(modifier = Modifier.fillMaxWidth()) {
                 TextButton(onClick = {
-                    // Cambio visual instantáneo
                     localIsLiked = !localIsLiked
                     if (localIsLiked) localLikesCount++ else localLikesCount--
                     onLikeClick()
@@ -257,29 +418,5 @@ fun PostItem(
                 }
             }
         }
-    }
-}
-
-@Composable
-fun StoriesSection(myProfilePic: String?) {
-    Column(modifier = Modifier.padding(vertical = 12.dp)) {
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            item { StoryCircle(name = "Tú", isMe = true, imageUri = myProfilePic, hasStories = false) }
-            items(5) { i -> StoryCircle(name = "Motero $i", isMe = false, imageUri = null, hasStories = true) }
-        }
-    }
-}
-
-@Composable
-fun StoryCircle(name: String, isMe: Boolean, imageUri: String?, hasStories: Boolean) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 4.dp)) {
-        Box(modifier = Modifier.size(70.dp).border(2.dp, if (hasStories) Color(0xFF6200EE) else Color.LightGray, CircleShape).padding(3.dp).clip(CircleShape).background(Color.White)) {
-            if (imageUri != null) {
-                AsyncImage(model = imageUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            } else {
-                Icon(Icons.Default.Person, null, modifier = Modifier.fillMaxSize().padding(10.dp), tint = Color.Gray)
-            }
-        }
-        Text(text = name, fontSize = 11.sp, maxLines = 1)
     }
 }

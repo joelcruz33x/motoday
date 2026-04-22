@@ -14,6 +14,9 @@ class AppwriteManager private constructor(context: Context) {
         const val COLLECTION_PROFILES_ID = "profiles"
         const val COLLECTION_POSTS_ID = "posts"
         const val COLLECTION_STAMPS_ID = "stamps"
+        const val COLLECTION_STORIES_ID = "stories"
+        const val COLLECTION_GROUPS_ID = "groups"
+        const val COLLECTION_MESSAGES_ID = "group_messages"
         const val BUCKET_ID = "69e844ea000bbe88673c"
 
         @Volatile
@@ -44,6 +47,18 @@ class AppwriteManager private constructor(context: Context) {
             file = file
         )
         return response.id
+    }
+
+    suspend fun getUserProfile(userId: String): Document<Map<String, Any>>? {
+        return try {
+            databases.getDocument(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_PROFILES_ID,
+                documentId = userId
+            )
+        } catch (e: Exception) {
+            null
+        }
     }
 
     fun getImageUrl(fileId: String): String {
@@ -174,6 +189,206 @@ class AppwriteManager private constructor(context: Context) {
                 )
             ).documents
         } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    // --- SECCIÓN DE GRUPOS ---
+
+    suspend fun createGroup(
+        adminId: String,
+        name: String,
+        description: String,
+        iconResName: String = "ic_group_default",
+        photoUrl: String? = null
+    ): String? {
+        return try {
+            val response = databases.createDocument(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_GROUPS_ID,
+                documentId = io.appwrite.ID.unique(),
+                data = mapOf(
+                    "name" to name,
+                    "description" to description,
+                    "adminId" to adminId,
+                    "members" to listOf(adminId), // El admin es el primer miembro
+                    "iconResName" to iconResName,
+                    "photoUrl" to (photoUrl ?: ""),
+                    "createdAt" to System.currentTimeMillis()
+                )
+            )
+            response.id
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    suspend fun updateGroup(
+        groupId: String,
+        name: String? = null,
+        photoUrl: String? = null
+    ): Boolean {
+        return try {
+            val data = mutableMapOf<String, Any>()
+            name?.let { data["name"] = it }
+            photoUrl?.let { data["photoUrl"] = it }
+
+            databases.updateDocument(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_GROUPS_ID,
+                documentId = groupId,
+                data = data
+            )
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    suspend fun getAllGroups(): List<Document<Map<String, Any>>> {
+        return try {
+            databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_GROUPS_ID
+            ).documents
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun getMyGroupsMemberIds(userId: String): Set<String> {
+        return try {
+            val myGroups = databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_GROUPS_ID,
+                queries = listOf(
+                    Query.equal("members", userId)
+                )
+            ).documents
+            
+            val memberIds = mutableSetOf<String>()
+            myGroups.forEach { group ->
+                val members = group.data["members"] as? List<String>
+                members?.let { memberIds.addAll(it) }
+            }
+            memberIds
+        } catch (e: Exception) {
+            setOf(userId) // Al menos devolvemos el propio ID
+        }
+    }
+
+    suspend fun joinGroup(groupId: String, userId: String, currentMembers: List<String>): Boolean {
+        return try {
+            if (currentMembers.contains(userId)) return true
+            
+            val newMembers = currentMembers + userId
+            databases.updateDocument(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_GROUPS_ID,
+                documentId = groupId,
+                data = mapOf("members" to newMembers)
+            )
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    // --- SECCIÓN DE STORIES (ESTADOS/STAMPS VISUALES) ---
+
+    suspend fun createStory(
+        userId: String,
+        userName: String,
+        userProfilePic: String?,
+        imageUrl: String,
+        caption: String? = null
+    ): Boolean {
+        return try {
+            databases.createDocument(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_STORIES_ID,
+                documentId = io.appwrite.ID.unique(),
+                data = mapOf(
+                    "userId" to userId,
+                    "userName" to userName,
+                    "userProfilePic" to (userProfilePic ?: ""),
+                    "imageUrl" to imageUrl,
+                    "caption" to (caption ?: ""),
+                    "createdAt" to System.currentTimeMillis(),
+                    "expiresAt" to System.currentTimeMillis() + (6 * 60 * 60 * 1000) // Expira en 6h
+                )
+            )
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    suspend fun getActiveStories(): List<Document<Map<String, Any>>> {
+        return try {
+            databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_STORIES_ID,
+                queries = listOf(
+                    Query.greaterThan("expiresAt", System.currentTimeMillis()),
+                    Query.orderDesc("createdAt")
+                )
+            ).documents
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun sendMessage(
+        groupId: String,
+        senderId: String,
+        senderName: String,
+        text: String,
+        imageUrl: String? = null,
+        fileUrl: String? = null,
+        fileName: String? = null
+    ): Boolean {
+        return try {
+            databases.createDocument(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_MESSAGES_ID,
+                documentId = io.appwrite.ID.unique(),
+                data = mapOf(
+                    "groupId" to groupId,
+                    "senderId" to senderId,
+                    "senderName" to senderName,
+                    "text" to text,
+                    "timestamp" to System.currentTimeMillis(),
+                    "imageUrl" to (imageUrl ?: ""),
+                    "fileUrl" to (fileUrl ?: ""),
+                    "fileName" to (fileName ?: "")
+                )
+            )
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("AppwriteChat", "Error al enviar mensaje: ${e.message}")
+            e.printStackTrace()
+            false
+        }
+    }
+
+    suspend fun getGroupMessages(groupId: String): List<Document<Map<String, Any>>> {
+        return try {
+            databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_MESSAGES_ID,
+                queries = listOf(
+                    Query.equal("groupId", groupId),
+                    Query.orderAsc("timestamp"),
+                    Query.limit(100)
+                )
+            ).documents
+        } catch (e: Exception) {
+            android.util.Log.e("AppwriteChat", "Error al cargar mensajes: ${e.message}")
             emptyList()
         }
     }

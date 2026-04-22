@@ -65,7 +65,28 @@ fun ProfileScreen(navController: NavController) {
     val tabs = listOf("Mi Moto", "Pasaporte", "Logros", "Estadísticas")
 
     LaunchedEffect(Unit) {
-        // Al entrar, podríamos opcionalmente sincronizar desde Appwrite si quisiéramos
+        scope.launch {
+            try {
+                val userId = authManager.getCurrentUserId()
+                if (userId != null) {
+                    val remoteDocuments = appwrite.getUserStamps(userId)
+                    if (remoteDocuments.isNotEmpty()) {
+                        val localStamps = remoteDocuments.map { doc ->
+                            com.example.motoday.data.local.entities.PassportStampEntity(
+                                rideId = (doc.data["rideId"] as? Number)?.toInt() ?: 0,
+                                rideTitle = doc.data["rideTitle"] as? String ?: "Viaje",
+                                locationName = doc.data["locationName"] as? String ?: "Desconocido",
+                                iconResName = doc.data["iconResName"] as? String ?: "ic_stamp_default",
+                                date = (doc.data["date"] as? Number)?.toLong() ?: System.currentTimeMillis()
+                            )
+                        }
+                        db.passportDao().insertStamps(localStamps)
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("AppwriteSync", "Error al sincronizar sellos: ${e.message}")
+            }
+        }
     }
 
     Scaffold(

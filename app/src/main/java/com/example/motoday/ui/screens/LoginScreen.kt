@@ -24,11 +24,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+import com.example.motoday.data.local.AppDatabase
+import com.example.motoday.data.local.entities.UserEntity
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(navController: NavController) {
     val context = LocalContext.current
     val appwrite = remember { AppwriteManager.getInstance(context) }
+    val db = AppDatabase.getDatabase(context)
     val scope = rememberCoroutineScope()
     
     var email by remember { mutableStateOf("") }
@@ -94,6 +98,31 @@ fun LoginScreen(navController: NavController) {
                     scope.launch(Dispatchers.IO) {
                         try {
                             appwrite.account.createEmailPasswordSession(email, password)
+                            
+                            // 1. Obtener ID de usuario
+                            val userId = appwrite.account.get().id
+                            
+                            // 2. Descargar perfil de Appwrite
+                            val remoteProfile = appwrite.getUserProfile(userId)
+                            
+                            // 3. Si existe en la nube, guardarlo en Room (Local)
+                            if (remoteProfile != null) {
+                                val userEntity = UserEntity(
+                                    id = 1, // ID fijo para el perfil local
+                                    name = remoteProfile.data["name"] as? String ?: "Motero",
+                                    level = remoteProfile.data["level"] as? String ?: "Novato",
+                                    bikeModel = remoteProfile.data["bikeModel"] as? String ?: "",
+                                    bikeSpecs = remoteProfile.data["bikeSpecs"] as? String ?: "",
+                                    bikeYear = remoteProfile.data["bikeYear"] as? String ?: "",
+                                    bikeColor = remoteProfile.data["bikeColor"] as? String ?: "",
+                                    bikeStatus = remoteProfile.data["bikeStatus"] as? String ?: "Disponible",
+                                    profilePictureUri = remoteProfile.data["profilePic"] as? String,
+                                    totalKilometers = (remoteProfile.data["totalKm"] as? Number)?.toInt() ?: 0,
+                                    ridesCompleted = (remoteProfile.data["ridesCount"] as? Number)?.toInt() ?: 0
+                                )
+                                db.userDao().insertOrUpdate(userEntity)
+                            }
+
                             withContext(Dispatchers.Main) {
                                 isLoading = false
                                 navController.navigate(Screen.Home.route) {
