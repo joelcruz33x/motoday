@@ -57,7 +57,7 @@ fun ProfileScreen(navController: NavController) {
     val userProfile by db.userDao().getUserProfile().collectAsState(initial = null)
     val scope = rememberCoroutineScope()
     
-    val appwrite = remember { AppwriteManager(context) }
+    val appwrite = remember { AppwriteManager.getInstance(context) }
     val authManager = remember { AuthManager(context) }
 
     var isEditing by remember { mutableStateOf(false) }

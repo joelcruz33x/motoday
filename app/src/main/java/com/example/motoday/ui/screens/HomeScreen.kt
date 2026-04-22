@@ -41,7 +41,7 @@ import kotlinx.coroutines.launch
 fun HomeScreen(navController: NavController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val appwrite = remember { AppwriteManager(context) }
+    val appwrite = remember { AppwriteManager.getInstance(context) }
     val authManager = remember { AuthManager(context) }
     val db = AppDatabase.getDatabase(context)
     
@@ -115,12 +115,19 @@ fun HomeScreen(navController: NavController) {
                     val data = post.data
                     val likes = (data["likes"] as? List<String>) ?: emptyList()
                     
+                    // Conversión segura de Number (Double o Long) a Long
+                    val rawTimestamp = data["timestamp"]
+                    val timestamp = when (rawTimestamp) {
+                        is Number -> rawTimestamp.toLong()
+                        else -> System.currentTimeMillis()
+                    }
+
                     PostItem(
                         username = data["userName"] as? String ?: "Motero",
                         userLevel = data["userLevel"] as? String ?: "Novato",
                         userProfilePic = data["profilePic"] as? String,
                         content = data["caption"] as? String ?: "",
-                        timestamp = (data["timestamp"] as? Double)?.toLong() ?: System.currentTimeMillis(),
+                        timestamp = timestamp,
                         imageUrls = (data["imageUrl"] as? List<String>) ?: emptyList(),
                         likesCount = likes.size,
                         isLiked = likes.contains(currentUserId),

@@ -28,7 +28,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun LoginScreen(navController: NavController) {
     val context = LocalContext.current
-    val appwrite = remember { AppwriteManager(context) }
+    val appwrite = remember { AppwriteManager.getInstance(context) }
     val scope = rememberCoroutineScope()
     
     var email by remember { mutableStateOf("") }

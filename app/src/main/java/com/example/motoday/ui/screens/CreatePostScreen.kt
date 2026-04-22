@@ -44,7 +44,7 @@ import kotlinx.coroutines.withContext
 fun CreatePostScreen(navController: NavController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val appwrite = remember { AppwriteManager(context) }
+    val appwrite = remember { AppwriteManager.getInstance(context) }
     val authManager = remember { AuthManager(context) }
     val db = AppDatabase.getDatabase(context)
 

@@ -6,7 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class AuthManager(context: Context) {
-    private val appwrite = AppwriteManager(context)
+    private val appwrite = AppwriteManager.getInstance(context)
 
     suspend fun isUserLoggedIn(): Boolean {
         return try {

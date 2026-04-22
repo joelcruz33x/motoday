@@ -33,7 +33,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun RegisterScreen(navController: NavController) {
     val context = LocalContext.current
-    val appwrite = remember { AppwriteManager(context) }
+    val appwrite = remember { AppwriteManager.getInstance(context) }
     val db = AppDatabase.getDatabase(context)
     val scope = rememberCoroutineScope()
     

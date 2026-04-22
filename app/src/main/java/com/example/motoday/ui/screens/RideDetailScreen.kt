@@ -25,6 +25,8 @@ import com.example.motoday.data.local.AppDatabase
 import com.example.motoday.data.local.entities.PassportStampEntity
 import com.example.motoday.data.local.entities.RideEntity
 import com.example.motoday.data.local.entities.UserEntity
+import com.example.motoday.data.remote.AppwriteManager
+import com.example.motoday.data.remote.AuthManager
 import kotlin.math.*
 import com.example.motoday.data.network.WeatherApiService
 import com.example.motoday.data.network.model.WeatherResponse
@@ -43,6 +45,8 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
     val context = LocalContext.current
     val db = AppDatabase.getDatabase(context)
     val scope = rememberCoroutineScope()
+    val appwrite = remember { AppwriteManager.getInstance(context) }
+    val authManager = remember { AuthManager(context) }
     
     var ride by remember { mutableStateOf<RideEntity?>(null) }
     
@@ -280,6 +284,25 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                                             iconResName = iconName
                                         )
                                     )
+
+                                    // 4.1 Sincronizar con Appwrite (Nube)
+                                    scope.launch(Dispatchers.IO) {
+                                        try {
+                                            val userId = authManager.getCurrentUserId()
+                                            if (userId != null) {
+                                                appwrite.syncStamp(
+                                                    userId = userId,
+                                                    rideId = currentRide.id,
+                                                    rideTitle = currentRide.title,
+                                                    locationName = detectedCity,
+                                                    iconResName = iconName,
+                                                    date = System.currentTimeMillis()
+                                                )
+                                            }
+                                        } catch (e: Exception) {
+                                            e.printStackTrace()
+                                        }
+                                    }
                                     
                                     // Notificación por visitar nuevas ciudades
                                     if (citiesVisited == 2 && !stamps.any { it.locationName.lowercase() == detectedCity.lowercase() }) {
