@@ -28,6 +28,8 @@ import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.example.motoday.data.local.AppDatabase
 import com.example.motoday.data.remote.AppwriteManager
+import androidx.compose.animation.core.*
+import androidx.compose.ui.draw.scale
 import com.example.motoday.data.remote.AuthManager
 import com.example.motoday.ui.components.BottomNavigationBar
 import com.example.motoday.navigation.Screen
@@ -48,16 +50,16 @@ fun HomeScreen(navController: NavController) {
     val userProfile by db.userDao().getUserProfile().collectAsState(initial = null)
     var currentUserId by remember { mutableStateOf("") }
 
-    fun loadPosts() {
+    fun loadPosts(showLoading: Boolean = true) {
         scope.launch {
-            isRefreshing = true
+            if (showLoading) isRefreshing = true
             try {
                 currentUserId = authManager.getCurrentUserId() ?: ""
                 posts = appwrite.getPosts()
             } catch (e: Exception) {
                 // Error log
             } finally {
-                isRefreshing = false
+                if (showLoading) isRefreshing = false
             }
         }
     }
@@ -109,7 +111,7 @@ fun HomeScreen(navController: NavController) {
                     }
                 }
 
-                items(posts) { post ->
+                items(posts, key = { it.id }) { post ->
                     val data = post.data
                     val likes = (data["likes"] as? List<String>) ?: emptyList()
                     
@@ -124,8 +126,9 @@ fun HomeScreen(navController: NavController) {
                         isLiked = likes.contains(currentUserId),
                         onLikeClick = {
                             scope.launch {
+                                // Actualización silenciosa (sin pantalla de carga)
                                 appwrite.toggleLike(post.id, currentUserId, likes)
-                                loadPosts() // Recargar para ver el cambio
+                                loadPosts(showLoading = false) 
                             }
                         }
                     )
@@ -147,6 +150,20 @@ fun PostItem(
     isLiked: Boolean,
     onLikeClick: () -> Unit
 ) {
+    // Estado local para respuesta inmediata
+    var localIsLiked by remember(isLiked) { mutableStateOf(isLiked) }
+    var localLikesCount by remember(likesCount) { mutableStateOf(likesCount) }
+
+    // Animación de latido
+    val scale by animateFloatAsState(
+        targetValue = if (localIsLiked) 1.2f else 1.0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "LikeAnimation"
+    )
+
     // Cálculo de tiempo real (hace cuánto fue publicado)
     val timeAgo = DateUtils.getRelativeTimeSpanString(
         timestamp,
@@ -209,15 +226,22 @@ fun PostItem(
             Divider(thickness = 0.5.dp, color = Color.LightGray.copy(alpha = 0.5f))
             
             Row(modifier = Modifier.fillMaxWidth()) {
-                TextButton(onClick = onLikeClick) {
+                TextButton(onClick = {
+                    // Cambio visual instantáneo
+                    localIsLiked = !localIsLiked
+                    if (localIsLiked) localLikesCount++ else localLikesCount--
+                    onLikeClick()
+                }) {
                     Icon(
-                        imageVector = if (isLiked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                        imageVector = if (localIsLiked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
                         contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                        tint = if (isLiked) Color.Red else Color.Gray
+                        modifier = Modifier
+                            .size(20.dp)
+                            .scale(scale),
+                        tint = if (localIsLiked) Color.Red else Color.Gray
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("$likesCount likes", fontSize = 13.sp, color = if (isLiked) Color.Red else Color.Gray)
+                    Text("$localLikesCount likes", fontSize = 13.sp, color = if (localIsLiked) Color.Red else Color.Gray)
                 }
                 TextButton(onClick = { }) {
                     Icon(Icons.Outlined.Share, null, modifier = Modifier.size(20.dp), tint = Color.Gray)
