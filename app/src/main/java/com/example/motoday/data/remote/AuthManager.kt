@@ -28,4 +28,15 @@ class AuthManager(context: Context) {
             // Error al cerrar sesión
         }
     }
+
+    suspend fun getCurrentUserId(): String? {
+        return try {
+            withContext(Dispatchers.IO) {
+                val user = appwrite.account.get()
+                user.id
+            }
+        } catch (e: AppwriteException) {
+            null
+        }
+    }
 }

@@ -144,12 +144,13 @@ fun RegisterScreen(navController: NavController) {
                     scope.launch(Dispatchers.IO) {
                         try {
                             // 1. Crear cuenta
-                            appwrite.account.create(
+                            val account = appwrite.account.create(
                                 userId = ID.unique(),
                                 email = email,
                                 password = password,
                                 name = name
                             )
+                            val userId = account.id
                             
                             // Pequeña pausa para asegurar que el servidor procesó la creación
                             kotlinx.coroutines.delay(500)
@@ -157,11 +158,11 @@ fun RegisterScreen(navController: NavController) {
                             // 2. Iniciar sesión
                             appwrite.account.createEmailPasswordSession(email, password)
 
-                            // 3. Guardar perfil en Appwrite (Online)
+                            // 3. Guardar perfil en Appwrite (Online) - USANDO EL MISMO userId
                             appwrite.databases.createDocument(
                                 databaseId = "69e81a9500157d642919",
                                 collectionId = "profiles",
-                                documentId = ID.unique(),
+                                documentId = userId, // <--- CAMBIO AQUÍ
                                 data = mapOf(
                                     "name" to name,
                                     "level" to selectedLevel,

@@ -1,6 +1,7 @@
 package com.example.motoday.ui.screens
 
 import android.content.Intent
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -45,6 +46,9 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
+import com.example.motoday.data.remote.AppwriteManager
+import com.example.motoday.data.remote.AuthManager
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(navController: NavController) {
@@ -52,27 +56,16 @@ fun ProfileScreen(navController: NavController) {
     val db = AppDatabase.getDatabase(context)
     val userProfile by db.userDao().getUserProfile().collectAsState(initial = null)
     val scope = rememberCoroutineScope()
+    
+    val appwrite = remember { AppwriteManager(context) }
+    val authManager = remember { AuthManager(context) }
 
     var isEditing by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Mi Moto", "Pasaporte", "Logros", "Estadísticas")
 
     LaunchedEffect(Unit) {
-        val current = db.userDao().getUserProfile().first()
-        if (current == null) {
-            db.userDao().insertOrUpdate(
-                UserEntity(
-                    name = "Nuevo Motero",
-                    level = "Principiante",
-                    bikeModel = "Tu Moto",
-                    bikeSpecs = "Cilindraje",
-                    bikeYear = "Año",
-                    bikeColor = "Color",
-                    profilePictureUri = null,
-                    bikePictureUri = null
-                )
-            )
-        }
+        // Al entrar, podríamos opcionalmente sincronizar desde Appwrite si quisiéramos
     }
 
     Scaffold(
@@ -98,23 +91,76 @@ fun ProfileScreen(navController: NavController) {
                 if (isEditing) {
                     EditProfileForm(user) { updatedUser ->
                         scope.launch {
+                            // 1. Guardar en Room (Local)
                             db.userDao().insertOrUpdate(updatedUser)
+                            
+                            // 2. Intentar guardar en Appwrite (Remoto)
+                            try {
+                                val userId = authManager.getCurrentUserId()
+                                if (userId != null) {
+                                    appwrite.updateUserProfile(
+                                        userId = userId,
+                                        name = updatedUser.name,
+                                        level = updatedUser.level,
+                                        bikeModel = updatedUser.bikeModel,
+                                        bikeSpecs = updatedUser.bikeSpecs,
+                                        bikeYear = updatedUser.bikeYear,
+                                        bikeColor = updatedUser.bikeColor
+                                    )
+                                }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                                // Aquí podrías mostrar un Toast si falla la conexión
+                            }
+
                             isEditing = false
                         }
                     }
                 } else {
                     ProfileHeader(user, onImageSelected = { uriString ->
-                        try {
-                            val uri = uriString.toUri()
-                            context.contentResolver.takePersistableUriPermission(
-                                uri,
-                                Intent.FLAG_GRANT_READ_URI_PERMISSION
-                            )
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
                         scope.launch {
-                            db.userDao().insertOrUpdate(user.copy(profilePictureUri = uriString))
+                            try {
+                                val uri = uriString.toUri()
+                                val inputStream = context.contentResolver.openInputStream(uri)
+                                val bytes = inputStream?.readBytes()
+                                inputStream?.close()
+
+                                if (bytes != null) {
+                                    val fileName = "profile_${user.name.replace(" ", "_")}_${System.currentTimeMillis()}.jpg"
+                                    val inputFile = io.appwrite.models.InputFile.fromBytes(
+                                        bytes = bytes,
+                                        filename = fileName,
+                                        mimeType = "image/jpeg"
+                                    )
+                                    
+                                    // 1. Subir a Appwrite Storage
+                                    val fileId = appwrite.uploadImage(inputFile)
+                                    val remoteUrl = appwrite.getImageUrl(fileId)
+                                    
+                                    // 2. Actualizar en Appwrite Database
+                                    val userId = authManager.getCurrentUserId()
+                                    if (userId != null) {
+                                        appwrite.updateUserProfile(
+                                            userId = userId,
+                                            name = user.name,
+                                            level = user.level,
+                                            bikeModel = user.bikeModel,
+                                            bikeSpecs = user.bikeSpecs,
+                                            bikeYear = user.bikeYear,
+                                            bikeColor = user.bikeColor,
+                                            profilePic = remoteUrl
+                                        )
+                                    }
+                                    
+                                    // 3. Actualizar localmente en Room
+                                    db.userDao().insertOrUpdate(user.copy(profilePictureUri = remoteUrl))
+                                    
+                                    Toast.makeText(context, "Foto actualizada!", Toast.LENGTH_SHORT).show()
+                                }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                                Toast.makeText(context, "Error al subir foto", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     })
 
