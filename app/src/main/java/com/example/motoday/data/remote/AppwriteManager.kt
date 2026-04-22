@@ -2,6 +2,8 @@ package com.example.motoday.data.remote
 
 import android.content.Context
 import io.appwrite.Client
+import io.appwrite.Query
+import io.appwrite.models.Document
 import io.appwrite.services.Account
 import io.appwrite.services.Databases
 import io.appwrite.services.Storage
@@ -62,6 +64,37 @@ class AppwriteManager(context: Context) {
             documentId = userId,
             data = data
         )
+    }
+
+    suspend fun getPosts(): List<Document<Map<String, Any>>> {
+        return databases.listDocuments(
+            databaseId = DATABASE_ID,
+            collectionId = COLLECTION_POSTS_ID,
+            queries = listOf(
+                Query.orderDesc("timestamp")
+            )
+        ).documents
+    }
+
+    suspend fun toggleLike(postId: String, userId: String, currentLikes: List<String>): List<String>? {
+        return try {
+            val newLikes = if (currentLikes.contains(userId)) {
+                currentLikes.filter { it != userId }
+            } else {
+                currentLikes + userId
+            }
+
+            databases.updateDocument(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_POSTS_ID,
+                documentId = postId,
+                data = mapOf("likes" to newLikes)
+            )
+            newLikes
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null // Devolvemos null si falla para que el UI sepa que no hubo cambio
+        }
     }
 
     suspend fun createPost(
