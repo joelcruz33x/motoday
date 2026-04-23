@@ -160,9 +160,9 @@ fun RegisterScreen(navController: NavController) {
 
                             // 3. Guardar perfil en Appwrite (Online) - USANDO EL MISMO userId
                             appwrite.databases.createDocument(
-                                databaseId = "69e81a9500157d642919",
-                                collectionId = "profiles",
-                                documentId = userId, // <--- CAMBIO AQUÍ
+                                databaseId = AppwriteManager.DATABASE_ID,
+                                collectionId = AppwriteManager.COLLECTION_PROFILES_ID,
+                                documentId = userId,
                                 data = mapOf(
                                     "name" to name,
                                     "level" to selectedLevel,
@@ -170,7 +170,10 @@ fun RegisterScreen(navController: NavController) {
                                     "bikeSpecs" to "Sin datos",
                                     "bikeYear" to "-",
                                     "bikeColor" to "-",
-                                    "profilePic" to ""
+                                    "profilePic" to "",
+                                    "bikePic" to "",
+                                    "totalKm" to 0,
+                                    "rides" to 0
                                 )
                             )
 

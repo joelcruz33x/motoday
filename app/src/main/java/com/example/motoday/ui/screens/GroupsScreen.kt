@@ -35,9 +35,16 @@ import com.example.motoday.ui.components.BottomNavigationBar
 import kotlinx.coroutines.launch
 import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.data.remote.AuthManager
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import io.appwrite.models.Document
+import io.appwrite.services.Realtime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+enum class MessageStatus {
+    SENDING, SENT, READ, ERROR
+}
 
 data class ChatMessage(
     val sender: String,
@@ -47,7 +54,8 @@ data class ChatMessage(
     val imageUri: String? = null,
     val fileUri: String? = null,
     val fileName: String? = null,
-    val id: String = UUID.randomUUID().toString()
+    val id: String = UUID.randomUUID().toString(),
+    val status: MessageStatus = MessageStatus.SENT
 )
 
 data class GroupInfo(
@@ -75,35 +83,91 @@ fun GroupsScreen(navController: NavController) {
     var isExploring by remember { mutableStateOf(true) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf(false) }
+    var showMembersDialog by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     
     val selectedGroup = allGroups.find { it.id == selectedGroupId }
+    val gson = remember { Gson() }
+
+    fun getRolesMap(groupDoc: Document<Map<String, Any>>?): Map<String, String> {
+        val rolesJson = groupDoc?.data?.get("roles") as? String ?: "{}"
+        return try {
+            val type = object : TypeToken<Map<String, String>>() {}.type
+            gson.fromJson(rolesJson, type) ?: emptyMap()
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
     
     var messageText by remember { mutableStateOf("") }
     val chatMessages = remember { mutableStateListOf<ChatMessage>() }
     val listState = rememberLazyListState()
 
-    // Cargar mensajes al seleccionar un grupo
+    // 1. Cargar mensajes iniciales al seleccionar un grupo
     LaunchedEffect(selectedGroupId) {
         if (selectedGroupId != null) {
-            scope.launch {
-                val remoteMessages = appwrite.getGroupMessages(selectedGroupId!!)
-                chatMessages.clear()
-                val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
-                remoteMessages.forEach { doc ->
-                    val senderId = doc.data["senderId"] as? String ?: ""
-                    val ts = doc.data["timestamp"] as? Number ?: 0L
-                    chatMessages.add(ChatMessage(
-                        sender = doc.data["senderName"] as? String ?: "Usuario",
-                        message = doc.data["text"] as? String ?: "",
-                        time = sdf.format(Date(ts.toLong())),
-                        isMe = senderId == currentUserId
-                    ))
-                }
-                if (chatMessages.isNotEmpty()) {
-                    listState.scrollToItem(chatMessages.size - 1)
+            val groupId = selectedGroupId!!
+            val remoteMessages = appwrite.getGroupMessages(groupId)
+            chatMessages.clear()
+            val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+            remoteMessages.forEach { doc ->
+                val senderId = doc.data["senderId"] as? String ?: ""
+                val ts = doc.data["timestamp"] as? Number ?: 0L
+                chatMessages.add(ChatMessage(
+                    id = doc.id,
+                    sender = doc.data["senderName"] as? String ?: "Usuario",
+                    message = doc.data["text"] as? String ?: "",
+                    time = sdf.format(Date(ts.toLong())),
+                    isMe = senderId == currentUserId
+                ))
+            }
+            if (chatMessages.isNotEmpty()) {
+                listState.scrollToItem(chatMessages.size - 1)
+            }
+        }
+    }
+
+    // 2. Suscribirse a Realtime para nuevos mensajes
+    DisposableEffect(selectedGroupId) {
+        val groupId = selectedGroupId
+        if (groupId == null) return@DisposableEffect onDispose {}
+
+        val realtime = Realtime(appwrite.client)
+        val subscription = realtime.subscribe(
+            "databases.${AppwriteManager.DATABASE_ID}.collections.${AppwriteManager.COLLECTION_MESSAGES_ID}.documents"
+        ) { event ->
+            val payload = event.payload as? Map<String, Any>
+            if (payload != null) {
+                val msgGroupId = payload["groupId"] as? String
+                if (msgGroupId == groupId) {
+                    val senderId = payload["senderId"] as? String ?: ""
+                    // Evitar duplicados si somos nosotros quienes enviamos (ya lo añadimos localmente)
+                    if (senderId != currentUserId) {
+                        val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+                        val ts = (payload["timestamp"] as? Number)?.toLong() ?: System.currentTimeMillis()
+                        
+                        val newMessage = ChatMessage(
+                            id = payload["\$id"] as? String ?: UUID.randomUUID().toString(),
+                            sender = payload["senderName"] as? String ?: "Usuario",
+                            message = payload["text"] as? String ?: "",
+                            time = sdf.format(Date(ts)),
+                            isMe = false
+                        )
+                        
+                        scope.launch {
+                            // Verificar que no esté ya en la lista (por si acaso)
+                            if (chatMessages.none { it.id == newMessage.id }) {
+                                chatMessages.add(newMessage)
+                                listState.animateScrollToItem(chatMessages.size - 1)
+                            }
+                        }
+                    }
                 }
             }
+        }
+
+        onDispose {
+            subscription.close()
         }
     }
 
@@ -117,7 +181,7 @@ fun GroupsScreen(navController: NavController) {
             currentUserName = profile?.data?.get("name") as? String ?: "Motero"
         }
 
-        val remoteGroups = appwrite.getAllGroups()
+        val remoteGroups = appwrite.getGroups()
         allGroups.clear()
         allGroups.addAll(remoteGroups)
         
@@ -174,18 +238,24 @@ fun GroupsScreen(navController: NavController) {
                                             mimeType = "image/jpeg"
                                         )
                                     )
-                                    uploadedUrl = appwrite.getImageUrl(fileId)
+                                    uploadedUrl = fileId // Guardamos solo el ID para que quepa en la DB
                                 }
                             } catch (e: Exception) {
                                 e.printStackTrace()
                             }
                         }
 
-                        // 2. Crear el grupo con la URL de la foto
-                        val newGroupId = appwrite.createGroup(userId, name, "Comunidad motera", photoUrl = uploadedUrl)
+                        // 2. Crear el grupo con la lógica correcta de parámetros
+                        val newGroupId = appwrite.createGroup(
+                            name = name,
+                            description = "Comunidad motera",
+                            adminId = userId,
+                            photoUrl = uploadedUrl,
+                            iconResName = null
+                        )
                         
                         if (newGroupId != null) {
-                            val remoteGroups = appwrite.getAllGroups()
+                            val remoteGroups = appwrite.getGroups()
                             allGroups.clear()
                             allGroups.addAll(remoteGroups)
                             selectedGroupId = newGroupId
@@ -201,11 +271,68 @@ fun GroupsScreen(navController: NavController) {
     if (showEditDialog && selectedGroup != null) {
         EditGroupDialog(
             currentName = selectedGroup.data["name"] as? String ?: "",
-            currentPhotoUri = null, // Podríamos sacar esto de la data si existiera
+            currentPhotoUri = selectedGroup.data["photoUrl"] as? String,
             onDismiss = { showEditDialog = false },
             onUpdate = { name, uri ->
-                // Aquí se llamaría a appwrite.updateGroup en el futuro
-                showEditDialog = false
+                scope.launch {
+                    var finalPhotoUrl = uri
+                    // Si el URI es local (content://), hay que subirlo primero
+                    if (uri != null && uri.startsWith("content://")) {
+                        try {
+                            val inputStream = context.contentResolver.openInputStream(android.net.Uri.parse(uri))
+                            val bytes = inputStream?.readBytes()
+                            if (bytes != null) {
+                                val fileId = appwrite.uploadImage(
+                                    io.appwrite.models.InputFile.fromBytes(
+                                        bytes = bytes,
+                                        filename = "group_update_${selectedGroup.id}.jpg",
+                                        mimeType = "image/jpeg"
+                                    )
+                                )
+                                finalPhotoUrl = appwrite.getImageUrl(fileId)
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+
+                    val success = appwrite.updateGroup(
+                        groupId = selectedGroup.id,
+                        name = name,
+                        photoUrl = finalPhotoUrl
+                    )
+                    if (success) {
+                        val remoteGroups = appwrite.getGroups()
+                        allGroups.clear()
+                        allGroups.addAll(remoteGroups)
+                    }
+                    showEditDialog = false
+                }
+            }
+        )
+    }
+
+    if (showMembersDialog && selectedGroup != null) {
+        val memberIds = (selectedGroup.data["members"] as? List<*>)?.filterIsInstance<String>() ?: emptyList()
+        val rolesMap = getRolesMap(selectedGroup)
+        val adminId = selectedGroup.data["adminId"] as? String ?: ""
+        
+        GroupMembersDialog(
+            memberIds = memberIds,
+            adminId = adminId,
+            currentUserId = currentUserId ?: "",
+            roles = rolesMap,
+            appwrite = appwrite,
+            onDismiss = { showMembersDialog = false },
+            onAssignRole = { userId, role ->
+                scope.launch {
+                    val success = appwrite.updateMemberRole(selectedGroup.id, userId, role)
+                    if (success) {
+                        val remoteGroups = appwrite.getGroups()
+                        allGroups.clear()
+                        allGroups.addAll(remoteGroups)
+                    }
+                }
             }
         )
     }
@@ -234,18 +361,44 @@ fun GroupsScreen(navController: NavController) {
                             expanded = showMenu,
                             onDismissRequest = { showMenu = false }
                         ) {
-                            DropdownMenuItem(
-                                text = { Text("Editar Grupo") },
-                                onClick = {
-                                    showMenu = false
-                                    showEditDialog = true
-                                },
-                                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) }
-                            )
+                            val isAdmin = currentUserId == selectedGroup?.data?.get("adminId")
+                            if (isAdmin) {
+                                DropdownMenuItem(
+                                    text = { Text("Editar Grupo") },
+                                    onClick = {
+                                        showMenu = false
+                                        showEditDialog = true
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) }
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Info. del Grupo") },
-                                onClick = { showMenu = false },
+                                onClick = {
+                                    showMenu = false
+                                    showMembersDialog = true
+                                },
                                 leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) }
+                            )
+                            Divider()
+                            DropdownMenuItem(
+                                text = { Text("Abandonar Grupo", color = Color.Red) },
+                                onClick = {
+                                    showMenu = false
+                                    selectedGroupId?.let { gid ->
+                                        scope.launch {
+                                            val success = appwrite.leaveGroup(gid, currentUserId ?: "")
+                                            if (success) {
+                                                val remoteGroups = appwrite.getGroups()
+                                                allGroups.clear()
+                                                allGroups.addAll(remoteGroups)
+                                                selectedGroupId = null
+                                                isExploring = true
+                                            }
+                                        }
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Default.ExitToApp, contentDescription = null, tint = Color.Red) }
                             )
                         }
                     }
@@ -284,9 +437,12 @@ fun GroupsScreen(navController: NavController) {
                     val members = doc.data["members"] as? List<*>
                     members?.contains(currentUserId) == true
                 }.forEach { doc ->
+                    val rawPhotoUrl = doc.data["photoUrl"] as? String
+                    val finalPhotoUrl = if (!rawPhotoUrl.isNullOrEmpty()) appwrite.getImageUrl(rawPhotoUrl) else null
+                    
                     GroupIconCircle(
                         name = doc.data["name"] as? String ?: "Grupo",
-                        photoUrl = doc.data["photoUrl"] as? String,
+                        photoUrl = finalPhotoUrl,
                         isSelected = !isExploring && selectedGroupId == doc.id,
                         onClick = { 
                             selectedGroupId = doc.id 
@@ -321,11 +477,12 @@ fun GroupsScreen(navController: NavController) {
                         onQueryChange = { searchQuery = it },
                         allGroups = allGroups,
                         currentUserId = currentUserId ?: "",
+                        appwrite = appwrite, // Agregamos el parámetro faltante
                         onJoin = { groupId, members ->
                             scope.launch {
                                 val success = appwrite.joinGroup(groupId, currentUserId ?: "", members)
                                 if (success) {
-                                    val remoteGroups = appwrite.getAllGroups()
+                                    val remoteGroups = appwrite.getGroups()
                                     allGroups.clear()
                                     allGroups.addAll(remoteGroups)
                                     selectedGroupId = groupId
@@ -350,8 +507,14 @@ fun GroupsScreen(navController: NavController) {
                                 messageText = ""
                                 val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
                                 
-                                // 1. Crear mensaje temporal
-                                val tempMsg = ChatMessage(currentUserName, textToSend, "Enviando...", true)
+                                // 1. Crear mensaje temporal con estado SENDING
+                                val tempMsg = ChatMessage(
+                                    sender = currentUserName,
+                                    message = textToSend,
+                                    time = sdf.format(Date()),
+                                    isMe = true,
+                                    status = MessageStatus.SENDING
+                                )
                                 chatMessages.add(tempMsg)
                                 scope.launch { listState.animateScrollToItem(chatMessages.size - 1) }
 
@@ -367,10 +530,15 @@ fun GroupsScreen(navController: NavController) {
                                     // 3. Actualizar estado del mensaje
                                     val index = chatMessages.indexOfFirst { it.id == tempMsg.id }
                                     if (index != -1) {
-                                        if (success) {
-                                            chatMessages[index] = chatMessages[index].copy(time = sdf.format(Date()))
+                                        if (success != null) {
+                                            chatMessages[index] = chatMessages[index].copy(
+                                                status = MessageStatus.SENT,
+                                                time = sdf.format(Date())
+                                            )
                                         } else {
-                                            chatMessages[index] = chatMessages[index].copy(time = "Error")
+                                            chatMessages[index] = chatMessages[index].copy(
+                                                status = MessageStatus.ERROR
+                                            )
                                         }
                                     }
                                 }
@@ -391,7 +559,8 @@ fun ExploreGroupsContent(
     onQueryChange: (String) -> Unit,
     allGroups: List<Document<Map<String, Any>>>,
     currentUserId: String,
-    onJoin: (String, List<String>) -> Unit
+    onJoin: (String, List<String>) -> Unit,
+    appwrite: AppwriteManager // Añadimos el manager para obtener URLs
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         OutlinedTextField(
@@ -414,6 +583,8 @@ fun ExploreGroupsContent(
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(filteredGroups) { doc ->
                 val name = doc.data["name"] as? String ?: "Grupo"
+                val photoId = doc.data["photoUrl"] as? String
+                val photoUrl = if (!photoId.isNullOrEmpty()) appwrite.getImageUrl(photoId) else null
                 val members = (doc.data["members"] as? List<*>)?.filterIsInstance<String>() ?: emptyList()
                 val isMember = members.contains(currentUserId)
 
@@ -425,8 +596,23 @@ fun ExploreGroupsContent(
                         modifier = Modifier.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(Color.Gray), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Groups, contentDescription = null, tint = Color.White)
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (!photoUrl.isNullOrEmpty()) {
+                                AsyncImage(
+                                    model = photoUrl,
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                Icon(Icons.Default.Groups, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            }
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
@@ -642,15 +828,207 @@ fun ChatBubble(msg: ChatMessage) {
                 if (msg.message.isNotBlank()) {
                     Text(text = msg.message, color = textColor)
                 }
-                Text(
-                    text = msg.time,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = textColor.copy(alpha = 0.7f),
+                
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.align(Alignment.End)
-                )
+                ) {
+                    Text(
+                        text = msg.time,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = textColor.copy(alpha = 0.7f)
+                    )
+                    
+                    if (msg.isMe) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        val (icon, tint) = when (msg.status) {
+                            MessageStatus.SENDING -> Icons.Default.Schedule to textColor.copy(alpha = 0.5f)
+                            MessageStatus.SENT -> Icons.Default.Check to textColor.copy(alpha = 0.7f)
+                            MessageStatus.READ -> Icons.Default.DoneAll to Color(0xFF00BFFF)
+                            MessageStatus.ERROR -> Icons.Default.Error to MaterialTheme.colorScheme.error
+                        }
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            modifier = Modifier.size(12.dp),
+                            tint = tint
+                        )
+                    }
+                }
             }
         }
     }
+}
+
+@Composable
+fun GroupMembersDialog(
+    memberIds: List<String>,
+    adminId: String,
+    currentUserId: String,
+    roles: Map<String, String>,
+    appwrite: AppwriteManager,
+    onDismiss: () -> Unit,
+    onAssignRole: (String, String?) -> Unit
+) {
+    var membersProfiles by remember { mutableStateOf<List<Document<Map<String, Any>>>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    val isCurrentUserAdmin = currentUserId == adminId
+    
+    // Estado local para actualización inmediata de la UI al asignar roles
+    val localRoles = remember { mutableStateMapOf<String, String>() }
+
+    val availableRoles = listOf("Presidente", "Vicepresidente", "Sargento de Armas", "Secretario", "Tesorero", "Capitán de Ruta", "Prospecto")
+
+    LaunchedEffect(memberIds, roles) {
+        membersProfiles = appwrite.getUsersProfiles(memberIds)
+        localRoles.clear()
+        roles.forEach { (k, v) -> localRoles[k] = v }
+        isLoading = false
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Miembros del Grupo") },
+        text = {
+            Box(modifier = Modifier.heightIn(max = 450.dp)) {
+                if (isLoading) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(membersProfiles) { profile ->
+                            val userId = profile.id
+                            val name = profile.data["name"] as? String ?: "Motero"
+                            val photoUrl = profile.data["profilePic"] as? String
+                            val level = profile.data["level"] as? String ?: "Novato"
+                            val userRole = localRoles[userId]
+
+                            var showRoleMenu by remember { mutableStateOf(false) }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (!photoUrl.isNullOrEmpty()) {
+                                        AsyncImage(
+                                            model = photoUrl,
+                                            contentDescription = null,
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    } else {
+                                        Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = name, 
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false)
+                                        )
+                                        
+                                        if (userId == adminId) {
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Icon(
+                                                Icons.Default.Stars, 
+                                                contentDescription = "Admin", 
+                                                tint = Color(0xFFFFB100), 
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+
+                                        if (userRole != null) {
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            val badgeColor = when (userRole) {
+                                                "Presidente" -> Color(0xFFFFD700)
+                                                "Vicepresidente" -> Color(0xFFC0C0C0)
+                                                "Sargento de Armas" -> Color(0xFFD32F2F)
+                                                "Secretario" -> Color(0xFF2196F3)
+                                                "Tesorero" -> Color(0xFF4CAF50)
+                                                "Capitán de Ruta" -> Color(0xFFFF9800)
+                                                "Prospecto" -> Color(0xFF9E9E9E)
+                                                else -> MaterialTheme.colorScheme.secondary
+                                            }
+                                            
+                                            Surface(
+                                                color = badgeColor.copy(alpha = 0.2f),
+                                                shape = RoundedCornerShape(12.dp),
+                                                border = androidx.compose.foundation.BorderStroke(1.dp, badgeColor.copy(alpha = 0.5f))
+                                            ) {
+                                                Text(
+                                                    text = userRole.uppercase(),
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontSize = 8.sp,
+                                                        fontWeight = FontWeight.ExtraBold
+                                                    ),
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                    color = badgeColor
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Text(
+                                        text = if (userRole != null) "Miembro del Consejo" else level, 
+                                        style = MaterialTheme.typography.labelSmall, 
+                                        color = Color.Gray
+                                    )
+                                }
+
+                                if (isCurrentUserAdmin && userId != currentUserId) {
+                                    Box {
+                                        IconButton(onClick = { showRoleMenu = true }) {
+                                            Icon(Icons.Default.AssignmentInd, contentDescription = "Asignar Rol")
+                                        }
+                                        DropdownMenu(
+                                            expanded = showRoleMenu,
+                                            onDismissRequest = { showRoleMenu = false }
+                                        ) {
+                                            availableRoles.forEach { role ->
+                                                DropdownMenuItem(
+                                                    text = { Text(role) },
+                                                    onClick = {
+                                                        // Actualización inmediata local
+                                                        localRoles[userId] = role
+                                                        onAssignRole(userId, role)
+                                                        showRoleMenu = false
+                                                    }
+                                                )
+                                            }
+                                            if (userRole != null) {
+                                                Divider()
+                                                DropdownMenuItem(
+                                                    text = { Text("Quitar Rol", color = Color.Red) },
+                                                    onClick = {
+                                                        // Actualización inmediata local
+                                                        localRoles.remove(userId)
+                                                        onAssignRole(userId, null)
+                                                        showRoleMenu = false
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Cerrar") }
+        }
+    )
 }
 
 @Composable

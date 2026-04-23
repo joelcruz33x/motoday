@@ -9,6 +9,7 @@ import com.example.motoday.data.local.dao.MaintenanceDao
 import com.example.motoday.data.local.dao.PassportDao
 import com.example.motoday.data.local.dao.PostDao
 import com.example.motoday.data.local.dao.RideDao
+import com.example.motoday.data.local.dao.SeenStoryDao
 import com.example.motoday.data.local.dao.StoryDao
 import com.example.motoday.data.local.dao.UserDao
 import com.example.motoday.data.local.entities.ContactEntity
@@ -16,10 +17,11 @@ import com.example.motoday.data.local.entities.MaintenanceEntity
 import com.example.motoday.data.local.entities.PassportStampEntity
 import com.example.motoday.data.local.entities.PostEntity
 import com.example.motoday.data.local.entities.RideEntity
+import com.example.motoday.data.local.entities.SeenStoryEntity
 import com.example.motoday.data.local.entities.StoryEntity
 import com.example.motoday.data.local.entities.UserEntity
 
-@Database(entities = [PostEntity::class, RideEntity::class, UserEntity::class, ContactEntity::class, MaintenanceEntity::class, PassportStampEntity::class, StoryEntity::class], version = 17)
+@Database(entities = [PostEntity::class, RideEntity::class, UserEntity::class, ContactEntity::class, MaintenanceEntity::class, PassportStampEntity::class, StoryEntity::class, SeenStoryEntity::class], version = 18)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun postDao(): PostDao
     abstract fun rideDao(): RideDao
@@ -28,6 +30,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun maintenanceDao(): MaintenanceDao
     abstract fun passportDao(): PassportDao
     abstract fun storyDao(): StoryDao
+    abstract fun seenStoryDao(): SeenStoryDao
 
     companion object {
         @Volatile

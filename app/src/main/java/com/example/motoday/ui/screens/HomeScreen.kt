@@ -6,6 +6,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColor
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -57,6 +58,8 @@ fun HomeScreen(navController: NavController) {
     var selectedUserStories by remember { mutableStateOf<List<Document<Map<String, Any>>>?>(null) }
     var isRefreshing by remember { mutableStateOf(true) }
     var isUploadingStory by remember { mutableStateOf(false) }
+    
+    val seenStoryIds by db.seenStoryDao().getSeenStoryIds().collectAsState(initial = emptyList())
     
     val userProfile by db.userDao().getUserProfile().collectAsState(initial = null)
     var currentUserId by remember { mutableStateOf("") }
@@ -164,8 +167,14 @@ fun HomeScreen(navController: NavController) {
                             activeStories = activeStories,
                             currentUserId = currentUserId,
                             onAddStoryClick = { storyLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                            onSeeStoriesClick = { stories -> selectedUserStories = stories },
-                            isUploading = isUploadingStory
+                            onSeeStoriesClick = { stories -> 
+                                selectedUserStories = stories
+                                scope.launch {
+                                    stories.forEach { db.seenStoryDao().markAsSeen(com.example.motoday.data.local.entities.SeenStoryEntity(it.id)) }
+                                }
+                            },
+                            isUploading = isUploadingStory,
+                            seenStoryIds = seenStoryIds
                         ) 
                     }
 
@@ -224,32 +233,39 @@ fun StoriesSection(
     currentUserId: String,
     onAddStoryClick: () -> Unit,
     onSeeStoriesClick: (List<Document<Map<String, Any>>>) -> Unit,
-    isUploading: Boolean
+    isUploading: Boolean,
+    seenStoryIds: List<String>
 ) {
     val groupedStories = activeStories.groupBy { it.data["userId"] as String }
 
     Column(modifier = Modifier.padding(vertical = 12.dp)) {
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             item { 
+                val myStories = groupedStories[currentUserId] ?: emptyList()
+                val hasUnseenMyStories = myStories.any { !seenStoryIds.contains(it.id) }
+                
                 StoryCircle(
                     name = "Tú", 
                     isMe = true, 
                     imageUri = myProfilePic, 
-                    hasStories = groupedStories.containsKey(currentUserId),
+                    hasStories = myStories.isNotEmpty(),
+                    hasUnseenStories = hasUnseenMyStories,
                     isUploading = isUploading,
                     onAddClick = onAddStoryClick,
-                    onSeeClick = { groupedStories[currentUserId]?.let { onSeeStoriesClick(it) } }
+                    onSeeClick = { onSeeStoriesClick(myStories) }
                 ) 
             }
             
-            groupedStories.filter { it.key != currentUserId }.forEach { (userId, stories) ->
+            groupedStories.filter { it.key != currentUserId }.forEach { (_, stories) ->
                 val firstStory = stories.first().data
+                val hasUnseenStories = stories.any { !seenStoryIds.contains(it.id) }
                 item {
                     StoryCircle(
                         name = firstStory["userName"] as? String ?: "Motero",
                         isMe = false,
                         imageUri = firstStory["userProfilePic"] as? String,
                         hasStories = true,
+                        hasUnseenStories = hasUnseenStories,
                         onAddClick = {},
                         onSeeClick = { onSeeStoriesClick(stories) }
                     )
@@ -265,10 +281,23 @@ fun StoryCircle(
     isMe: Boolean, 
     imageUri: String?, 
     hasStories: Boolean,
+    hasUnseenStories: Boolean = false,
     isUploading: Boolean = false,
     onAddClick: () -> Unit,
     onSeeClick: () -> Unit
 ) {
+    // Animación para el borde si tiene historias no vistas
+    val infiniteTransition = rememberInfiniteTransition(label = "borderTransition")
+    val borderColor by infiniteTransition.animateColor(
+        initialValue = Color(0xFF6200EE),
+        targetValue = Color(0xFFBB86FC),
+        animationSpec = infiniteRepeatable(
+            animation = tween<Color>(1500, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "borderColor"
+    )
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally, 
         modifier = Modifier
@@ -278,8 +307,12 @@ fun StoryCircle(
             Box(
                 modifier = Modifier
                     .size(70.dp)
-                    .border(2.dp, if (hasStories) Color(0xFF6200EE) else Color.LightGray, CircleShape)
-                    .padding(3.dp)
+                    .border(
+                        width = 2.5.dp, 
+                        color = if (hasUnseenStories) borderColor else if (hasStories) Color.LightGray else Color.LightGray.copy(alpha = 0.5f),
+                        shape = CircleShape
+                    )
+                    .padding(4.dp)
                     .clip(CircleShape)
                     .background(Color.White)
                     .clickable { if (hasStories) onSeeClick() },

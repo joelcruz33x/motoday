@@ -245,6 +245,28 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                                             ridesCompleted = newRides,
                                             totalKilometers = newKms
                                         ))
+
+                                        // Sincronizar estadísticas con Appwrite
+                                        scope.launch(Dispatchers.IO) {
+                                            try {
+                                                val userId = authManager.getCurrentUserId()
+                                                if (userId != null) {
+                                                    appwrite.updateUserProfile(
+                                                        userId = userId,
+                                                        name = it.name,
+                                                        level = it.level,
+                                                        bikeModel = it.bikeModel,
+                                                        bikeSpecs = it.bikeSpecs,
+                                                        bikeYear = it.bikeYear,
+                                                        bikeColor = it.bikeColor,
+                                                        totalKm = newKms,
+                                                        rides = newRides
+                                                    )
+                                                }
+                                            } catch (e: Exception) {
+                                                android.util.Log.e("RideDetail", "Error sync stats: ${e.message}")
+                                            }
+                                        }
                                     }
 
                                     // 4. Añadir sello al pasaporte

@@ -60,28 +60,83 @@ fun ProfileScreen(navController: NavController) {
     val appwrite = remember { AppwriteManager.getInstance(context) }
     val authManager = remember { AuthManager(context) }
 
+    var userRoleInfo by remember { mutableStateOf<Pair<String, String>?>(null) }
     var isEditing by remember { mutableStateOf(false) }
+    var isLoadingInitial by remember { mutableStateOf(true) }
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Mi Moto", "Pasaporte", "Logros", "Estadísticas")
 
     LaunchedEffect(Unit) {
-        scope.launch {
+        val userId = authManager.getCurrentUserId()
+        if (userId != null) {
+            // 0. Verificar si el perfil existe localmente, si no, traerlo de Appwrite
             try {
-                val userId = authManager.getCurrentUserId()
-                if (userId != null) {
-                    val remoteDocuments = appwrite.getUserStamps(userId)
-                    if (remoteDocuments.isNotEmpty()) {
-                        val localStamps = remoteDocuments.map { doc ->
-                            com.example.motoday.data.local.entities.PassportStampEntity(
-                                rideId = (doc.data["rideId"] as? Number)?.toInt() ?: 0,
-                                rideTitle = doc.data["rideTitle"] as? String ?: "Viaje",
-                                locationName = doc.data["locationName"] as? String ?: "Desconocido",
-                                iconResName = doc.data["iconResName"] as? String ?: "ic_stamp_default",
-                                date = (doc.data["date"] as? Number)?.toLong() ?: System.currentTimeMillis()
-                            )
-                        }
-                        db.passportDao().insertStamps(localStamps)
+                val profileDoc = appwrite.getUserProfile(userId)
+                if (profileDoc != null) {
+                    val data = profileDoc.data
+                    val profilePicId = data["profilePic"] as? String
+                    val bikePicId = data["bikePic"] as? String
+
+                    val newUser = UserEntity(
+                        id = 1, // ID fijo para el perfil propio
+                        name = data["name"] as? String ?: "Motero",
+                        level = data["level"] as? String ?: "Novato",
+                        bikeModel = data["bikeModel"] as? String ?: "Sin moto",
+                        bikeSpecs = data["bikeSpecs"] as? String ?: "",
+                        bikeYear = data["bikeYear"] as? String ?: "",
+                        bikeColor = data["bikeColor"] as? String ?: "",
+                        profilePictureUri = profilePicId?.let { if (it.startsWith("http")) it else appwrite.getImageUrl(it) },
+                        bikePictureUri = bikePicId?.let { if (it.startsWith("http")) it else appwrite.getImageUrl(it) },
+                        totalKilometers = (data["totalKm"] as? Number)?.toInt() ?: 0,
+                        ridesCompleted = (data["rides"] as? Number)?.toInt() ?: 0
+                    )
+                    db.userDao().insertOrUpdate(newUser)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("ProfileScreen", "Error al sincronizar perfil: ${e.message}")
+            } finally {
+                isLoadingInitial = false
+            }
+
+            // 1. Obtener rol del usuario en sus grupos
+            try {
+                val allGroups = appwrite.getGroups()
+                val gson = com.google.gson.Gson()
+                val type = object : com.google.gson.reflect.TypeToken<Map<String, String>>() {}.type
+                
+                val groupWithRole = allGroups.find { doc ->
+                    val rolesJson = doc.data["roles"] as? String ?: "{}"
+                    val rolesMap: Map<String, String> = gson.fromJson(rolesJson, type) ?: emptyMap()
+                    rolesMap.containsKey(userId)
+                }
+                
+                if (groupWithRole != null) {
+                    val rolesJson = groupWithRole.data["roles"] as? String ?: "{}"
+                    val rolesMap: Map<String, String> = gson.fromJson(rolesJson, type) ?: emptyMap()
+                    val role = rolesMap[userId]
+                    val groupName = groupWithRole.data["name"] as? String ?: "Grupo"
+                    if (role != null) {
+                        userRoleInfo = role to groupName
                     }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("ProfileScreen", "Error al obtener roles: ${e.message}")
+            }
+
+            // 2. Sincronizar sellos
+            try {
+                val remoteDocuments = appwrite.getUserStamps(userId)
+                if (remoteDocuments.isNotEmpty()) {
+                    val localStamps = remoteDocuments.map { doc ->
+                        com.example.motoday.data.local.entities.PassportStampEntity(
+                            rideId = (doc.data["rideId"] as? Number)?.toInt() ?: 0,
+                            rideTitle = doc.data["rideTitle"] as? String ?: "Viaje",
+                            locationName = doc.data["locationName"] as? String ?: "Desconocido",
+                            iconResName = doc.data["iconResName"] as? String ?: "ic_stamp_default",
+                            date = (doc.data["date"] as? Number)?.toLong() ?: System.currentTimeMillis()
+                        )
+                    }
+                    db.passportDao().insertStamps(localStamps)
                 }
             } catch (e: Exception) {
                 android.util.Log.e("AppwriteSync", "Error al sincronizar sellos: ${e.message}")
@@ -138,7 +193,7 @@ fun ProfileScreen(navController: NavController) {
                         }
                     }
                 } else {
-                    ProfileHeader(user, onImageSelected = { uriString ->
+                    ProfileHeader(user, userRoleInfo, onImageSelected = { uriString ->
                         scope.launch {
                             try {
                                 val uri = uriString.toUri()
@@ -169,7 +224,7 @@ fun ProfileScreen(navController: NavController) {
                                             bikeSpecs = user.bikeSpecs,
                                             bikeYear = user.bikeYear,
                                             bikeColor = user.bikeColor,
-                                            profilePic = remoteUrl
+                                            profilePic = fileId // Guardar solo el ID
                                         )
                                     }
                                     
@@ -197,17 +252,49 @@ fun ProfileScreen(navController: NavController) {
 
                     when (selectedTab) {
                         0 -> MyBikeSection(user, navController) { uriString ->
-                            try {
-                                val uri = uriString.toUri()
-                                context.contentResolver.takePersistableUriPermission(
-                                    uri,
-                                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                )
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
                             scope.launch {
-                                db.userDao().insertOrUpdate(user.copy(bikePictureUri = uriString))
+                                try {
+                                    val userIdRemote = authManager.getCurrentUserId()
+                                    if (userIdRemote == null) return@launch
+
+                                    val uri = uriString.toUri()
+                                    context.contentResolver.takePersistableUriPermission(
+                                        uri,
+                                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                    )
+                                    
+                                    // 1. Subir a Appwrite Storage
+                                    val inputStream = context.contentResolver.openInputStream(uri)
+                                    val bytes = inputStream?.readBytes()
+                                    if (bytes != null) {
+                                        val fileId = appwrite.uploadImage(
+                                            io.appwrite.models.InputFile.fromBytes(
+                                                bytes = bytes,
+                                                filename = "bike_${userIdRemote}.jpg",
+                                                mimeType = "image/jpeg"
+                                            )
+                                        )
+                                        
+                                        val remoteUrl = appwrite.getImageUrl(fileId)
+
+                                        // 2. Actualizar en la Nube
+                                        appwrite.updateUserProfile(
+                                            userId = userIdRemote,
+                                            name = user.name,
+                                            level = user.level,
+                                            bikeModel = user.bikeModel,
+                                            bikeSpecs = user.bikeSpecs,
+                                            bikeYear = user.bikeYear,
+                                            bikeColor = user.bikeColor,
+                                            bikePic = fileId // Guardar solo el ID
+                                        )
+                                        
+                                        // 3. Actualizar localmente
+                                        db.userDao().insertOrUpdate(user.copy(bikePictureUri = remoteUrl))
+                                    }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("ProfileScreen", "Error subiendo foto moto: ${e.message}")
+                                }
                             }
                         }
                         1 -> PassportSection()
@@ -216,7 +303,11 @@ fun ProfileScreen(navController: NavController) {
                     }
                 }
             } ?: Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
+                if (isLoadingInitial) {
+                    CircularProgressIndicator()
+                } else {
+                    Text("Error al cargar perfil o sesión no iniciada")
+                }
             }
         }
     }
@@ -267,7 +358,7 @@ fun EditProfileForm(user: UserEntity, onSave: (UserEntity) -> Unit) {
 }
 
 @Composable
-fun ProfileHeader(user: UserEntity, onImageSelected: (String) -> Unit) {
+fun ProfileHeader(user: UserEntity, roleInfo: Pair<String, String>?, onImageSelected: (String) -> Unit) {
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
         onResult = { uri ->
@@ -275,54 +366,93 @@ fun ProfileHeader(user: UserEntity, onImageSelected: (String) -> Unit) {
         }
     )
 
-    Row(
-        modifier = Modifier.padding(16.dp).fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(80.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer)
-                .clickable {
-                    launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                },
-            contentAlignment = Alignment.Center
+    Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            if (user.profilePictureUri != null) {
-                AsyncImage(
-                    model = user.profilePictureUri,
-                    contentDescription = "Foto de perfil",
-                    modifier = Modifier.fillMaxSize().clip(CircleShape),
-                    contentScale = ContentScale.Crop
-                )
-            } else {
-                Icon(
-                    Icons.Default.Person,
-                    contentDescription = null,
-                    modifier = Modifier.size(50.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-            
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.2f)),
-                contentAlignment = Alignment.BottomCenter
+                    .size(80.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer)
+                    .clickable {
+                        launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    },
+                contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    Icons.Default.Edit,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp).padding(bottom = 4.dp),
-                    tint = Color.White
-                )
+                if (user.profilePictureUri != null) {
+                    AsyncImage(
+                        model = user.profilePictureUri,
+                        contentDescription = "Foto de perfil",
+                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Person,
+                        contentDescription = null,
+                        modifier = Modifier.size(50.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+                
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.2f)),
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    Icon(
+                        Icons.Default.Edit,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp).padding(bottom = 4.dp),
+                        tint = Color.White
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Column {
+                Text(text = user.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text(text = "Nivel: ${user.level}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
             }
         }
-        Spacer(modifier = Modifier.width(16.dp))
-        Column {
-            Text(text = user.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text(text = "Nivel: ${user.level}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
+
+        if (roleInfo != null) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Surface(
+                color = MaterialTheme.colorScheme.primary,
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+                tonalElevation = 4.dp,
+                shadowElevation = 2.dp
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Shield,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = roleInfo.first.uppercase(),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = Color.White,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 1.sp
+                        )
+                        Text(
+                            text = roleInfo.second,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.8f)
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -456,6 +586,11 @@ fun CityStamp(stamp: com.example.motoday.data.local.entities.PassportStampEntity
         animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy),
         label = "rotation"
     )
+
+    // Log para usar las variables y evitar advertencias
+    if (isVisible) {
+        // Las variables scale, alpha y rotation ya se usan en el Modifier
+    }
 
     // Configuración personalizada según el sello
     val stampConfig = when (stamp.iconResName) {
@@ -644,6 +779,10 @@ fun AchievementItem(title: String, desc: String, isUnlocked: Boolean) {
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
         label = "achScale"
     )
+
+    if (isVisible) {
+        // isVisible ya se usa en scale
+    }
 
     LaunchedEffect(isUnlocked) {
         if (isUnlocked) isVisible = true
