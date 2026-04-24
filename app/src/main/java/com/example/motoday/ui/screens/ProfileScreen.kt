@@ -1,5 +1,6 @@
 package com.example.motoday.ui.screens
 
+import android.util.Log
 import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -69,61 +70,62 @@ fun ProfileScreen(navController: NavController) {
     LaunchedEffect(Unit) {
         val userId = authManager.getCurrentUserId()
         if (userId != null) {
-            // 0. Verificar si el perfil existe localmente, si no, traerlo de Appwrite
+            // 0. Sincronizar Perfil
             try {
                 val profileDoc = appwrite.getUserProfile(userId)
                 if (profileDoc != null) {
                     val data = profileDoc.data
                     val profilePicId = data["profilePic"] as? String
                     val bikePicId = data["bikePic"] as? String
+                    val localUser = db.userDao().getUserProfileOnce()
 
-                    val newUser = UserEntity(
-                        id = 1, // ID fijo para el perfil propio
-                        name = data["name"] as? String ?: "Motero",
-                        level = data["level"] as? String ?: "Novato",
-                        bikeModel = data["bikeModel"] as? String ?: "Sin moto",
-                        bikeSpecs = data["bikeSpecs"] as? String ?: "",
-                        bikeYear = data["bikeYear"] as? String ?: "",
-                        bikeColor = data["bikeColor"] as? String ?: "",
-                        profilePictureUri = profilePicId?.let { if (it.startsWith("http")) it else appwrite.getImageUrl(it) },
-                        bikePictureUri = bikePicId?.let { if (it.startsWith("http")) it else appwrite.getImageUrl(it) },
-                        totalKilometers = (data["totalKm"] as? Number)?.toInt() ?: 0,
-                        ridesCompleted = (data["rides"] as? Number)?.toInt() ?: 0
+                    val newUser = (localUser ?: UserEntity(id = 1, name = "Motero", level = "Novato", bikeModel = "Sin moto", bikeSpecs = "", bikeYear = "", bikeColor = "")).copy(
+                        name = data["name"] as? String ?: (localUser?.name ?: "Motero"),
+                        level = data["level"] as? String ?: (localUser?.level ?: "Novato"),
+                        bikeModel = data["bikeModel"] as? String ?: (localUser?.bikeModel ?: "Sin moto"),
+                        bikeSpecs = data["bikeSpecs"] as? String ?: (localUser?.bikeSpecs ?: ""),
+                        bikeYear = data["bikeYear"] as? String ?: (localUser?.bikeYear ?: ""),
+                        bikeColor = data["bikeColor"] as? String ?: (localUser?.bikeColor ?: ""),
+                        profilePictureUri = when {
+                            !profilePicId.isNullOrBlank() && profilePicId != "null" -> if (profilePicId.startsWith("http")) profilePicId else appwrite.getImageUrl(profilePicId, AppwriteManager.BUCKET_PROFILES_ID)
+                            else -> localUser?.profilePictureUri
+                        },
+                        bikePictureUri = when {
+                            !bikePicId.isNullOrBlank() && bikePicId != "null" -> if (bikePicId.startsWith("http")) bikePicId else appwrite.getImageUrl(bikePicId, AppwriteManager.BUCKET_BIKES_ID)
+                            else -> localUser?.bikePictureUri
+                        },
+                        totalKilometers = (data["totalKm"] as? Number)?.toInt() ?: (localUser?.totalKilometers ?: 0),
+                        ridesCompleted = (data["rides"] as? Number)?.toInt() ?: (localUser?.ridesCompleted ?: 0)
                     )
                     db.userDao().insertOrUpdate(newUser)
+                } else if (db.userDao().getUserProfileOnce() == null) {
+                    db.userDao().insertOrUpdate(UserEntity(id = 1, name = "Motero", level = "Novato", bikeModel = "Sin moto", bikeSpecs = "", bikeYear = "", bikeColor = ""))
                 }
             } catch (e: Exception) {
-                android.util.Log.e("ProfileScreen", "Error al sincronizar perfil: ${e.message}")
-            } finally {
-                isLoadingInitial = false
+                Log.e("ProfileScreen", "Error sincronizando perfil: ${e.message}")
+                if (db.userDao().getUserProfileOnce() == null) {
+                    db.userDao().insertOrUpdate(UserEntity(id = 1, name = "Motero (Offline)", level = "Novato", bikeModel = "Sin moto", bikeSpecs = "", bikeYear = "", bikeColor = ""))
+                }
             }
 
-            // 1. Obtener rol del usuario en sus grupos
+            // 1. Sincronizar Roles
             try {
                 val allGroups = appwrite.getGroups()
                 val gson = com.google.gson.Gson()
                 val type = object : com.google.gson.reflect.TypeToken<Map<String, String>>() {}.type
-                
                 val groupWithRole = allGroups.find { doc ->
-                    val rolesJson = doc.data["roles"] as? String ?: "{}"
-                    val rolesMap: Map<String, String> = gson.fromJson(rolesJson, type) ?: emptyMap()
+                    val rolesMap: Map<String, String> = gson.fromJson(doc.data["roles"] as? String ?: "{}", type) ?: emptyMap()
                     rolesMap.containsKey(userId)
                 }
-                
                 if (groupWithRole != null) {
-                    val rolesJson = groupWithRole.data["roles"] as? String ?: "{}"
-                    val rolesMap: Map<String, String> = gson.fromJson(rolesJson, type) ?: emptyMap()
+                    val rolesMap: Map<String, String> = gson.fromJson(groupWithRole.data["roles"] as? String ?: "{}", type) ?: emptyMap()
                     val role = rolesMap[userId]
                     val groupName = groupWithRole.data["name"] as? String ?: "Grupo"
-                    if (role != null) {
-                        userRoleInfo = role to groupName
-                    }
+                    if (role != null) userRoleInfo = role to groupName
                 }
-            } catch (e: Exception) {
-                android.util.Log.e("ProfileScreen", "Error al obtener roles: ${e.message}")
-            }
+            } catch (e: Exception) { Log.e("ProfileScreen", "Error roles: ${e.message}") }
 
-            // 2. Sincronizar sellos
+            // 2. Sincronizar Sellos
             try {
                 val remoteDocuments = appwrite.getUserStamps(userId)
                 if (remoteDocuments.isNotEmpty()) {
@@ -138,10 +140,13 @@ fun ProfileScreen(navController: NavController) {
                     }
                     db.passportDao().insertStamps(localStamps)
                 }
-            } catch (e: Exception) {
-                android.util.Log.e("AppwriteSync", "Error al sincronizar sellos: ${e.message}")
+            } catch (e: Exception) { Log.e("ProfileScreen", "Error sellos: ${e.message}") }
+        } else {
+            if (db.userDao().getUserProfileOnce() == null) {
+                db.userDao().insertOrUpdate(UserEntity(id = 1, name = "Invitado", level = "Novato", bikeModel = "Sin moto", bikeSpecs = "", bikeYear = "", bikeColor = ""))
             }
         }
+        isLoadingInitial = false
     }
 
     Scaffold(
@@ -167,28 +172,29 @@ fun ProfileScreen(navController: NavController) {
                 if (isEditing) {
                     EditProfileForm(user) { updatedUser ->
                         scope.launch {
-                            // 1. Guardar en Room (Local)
-                            db.userDao().insertOrUpdate(updatedUser)
+                            val latestUser = db.userDao().getUserProfileOnce() ?: updatedUser
+                            val userToSave = updatedUser.copy(
+                                profilePictureUri = latestUser.profilePictureUri,
+                                bikePictureUri = latestUser.bikePictureUri
+                            )
+                            db.userDao().insertOrUpdate(userToSave)
                             
-                            // 2. Intentar guardar en Appwrite (Remoto)
                             try {
                                 val userId = authManager.getCurrentUserId()
                                 if (userId != null) {
                                     appwrite.updateUserProfile(
                                         userId = userId,
-                                        name = updatedUser.name,
-                                        level = updatedUser.level,
-                                        bikeModel = updatedUser.bikeModel,
-                                        bikeSpecs = updatedUser.bikeSpecs,
-                                        bikeYear = updatedUser.bikeYear,
-                                        bikeColor = updatedUser.bikeColor
+                                        name = userToSave.name,
+                                        level = userToSave.level,
+                                        bikeModel = userToSave.bikeModel,
+                                        bikeSpecs = userToSave.bikeSpecs,
+                                        bikeYear = userToSave.bikeYear,
+                                        bikeColor = userToSave.bikeColor
                                     )
                                 }
                             } catch (e: Exception) {
                                 e.printStackTrace()
-                                // Aquí podrías mostrar un Toast si falla la conexión
                             }
-
                             isEditing = false
                         }
                     }
@@ -197,6 +203,19 @@ fun ProfileScreen(navController: NavController) {
                         scope.launch {
                             try {
                                 val uri = uriString.toUri()
+                                
+                                // Intentar persistir permiso si es una URI local de tipo content
+                                try {
+                                    if (uri.scheme == "content") {
+                                        context.contentResolver.takePersistableUriPermission(
+                                            uri,
+                                            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                        )
+                                    }
+                                } catch (e: Exception) {
+                                    Log.d("ProfileScreen", "No se pudo persistir permiso (posiblemente de Google Photos o ya remota): ${e.message}")
+                                }
+
                                 val inputStream = context.contentResolver.openInputStream(uri)
                                 val bytes = inputStream?.readBytes()
                                 inputStream?.close()
@@ -209,11 +228,11 @@ fun ProfileScreen(navController: NavController) {
                                         mimeType = "image/jpeg"
                                     )
                                     
-                                    // 1. Subir a Appwrite Storage
-                                    val fileId = appwrite.uploadImage(inputFile)
-                                    val remoteUrl = appwrite.getImageUrl(fileId)
+                                    Log.d("ProfileScreen", "Subiendo imagen de perfil a Appwrite...")
+                                    val fileId = appwrite.uploadImage(inputFile, AppwriteManager.BUCKET_PROFILES_ID)
+                                    val remoteUrl = appwrite.getImageUrl(fileId, AppwriteManager.BUCKET_PROFILES_ID)
+                                    Log.d("ProfileScreen", "Imagen subida. URL generada: $remoteUrl")
                                     
-                                    // 2. Actualizar en Appwrite Database
                                     val userId = authManager.getCurrentUserId()
                                     if (userId != null) {
                                         appwrite.updateUserProfile(
@@ -224,17 +243,16 @@ fun ProfileScreen(navController: NavController) {
                                             bikeSpecs = user.bikeSpecs,
                                             bikeYear = user.bikeYear,
                                             bikeColor = user.bikeColor,
-                                            profilePic = fileId // Guardar solo el ID
+                                            profilePic = fileId
                                         )
                                     }
                                     
-                                    // 3. Actualizar localmente en Room
-                                    db.userDao().insertOrUpdate(user.copy(profilePictureUri = remoteUrl))
-                                    
+                                    val latestUser = db.userDao().getUserProfileOnce() ?: user
+                                    db.userDao().insertOrUpdate(latestUser.copy(profilePictureUri = remoteUrl))
                                     Toast.makeText(context, "Foto actualizada!", Toast.LENGTH_SHORT).show()
                                 }
                             } catch (e: Exception) {
-                                e.printStackTrace()
+                                Log.e("ProfileScreen", "Error al subir foto de perfil", e)
                                 Toast.makeText(context, "Error al subir foto", Toast.LENGTH_SHORT).show()
                             }
                         }
@@ -255,45 +273,71 @@ fun ProfileScreen(navController: NavController) {
                             scope.launch {
                                 try {
                                     val userIdRemote = authManager.getCurrentUserId()
-                                    if (userIdRemote == null) return@launch
+                                    if (userIdRemote == null) {
+                                        Toast.makeText(context, "Debes iniciar sesión", Toast.LENGTH_SHORT).show()
+                                        return@launch
+                                    }
 
                                     val uri = uriString.toUri()
-                                    context.contentResolver.takePersistableUriPermission(
-                                        uri,
-                                        Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                    )
+                                    try {
+                                        if (uri.scheme == "content") {
+                                            context.contentResolver.takePersistableUriPermission(
+                                                uri,
+                                                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                            )
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.d("ProfileScreen", "No se pudo persistir permiso moto: ${e.message}")
+                                    }
                                     
-                                    // 1. Subir a Appwrite Storage
                                     val inputStream = context.contentResolver.openInputStream(uri)
                                     val bytes = inputStream?.readBytes()
+                                    inputStream?.close()
+
                                     if (bytes != null) {
+                                        Log.d("ProfileScreen", "Subiendo foto de moto...")
+                                        val fileName = "bike_${userIdRemote}_${System.currentTimeMillis()}.jpg"
                                         val fileId = appwrite.uploadImage(
                                             io.appwrite.models.InputFile.fromBytes(
                                                 bytes = bytes,
-                                                filename = "bike_${userIdRemote}.jpg",
+                                                filename = fileName,
                                                 mimeType = "image/jpeg"
-                                            )
+                                            ),
+                                            AppwriteManager.BUCKET_BIKES_ID
                                         )
                                         
-                                        val remoteUrl = appwrite.getImageUrl(fileId)
+                                        val remoteUrl = appwrite.getImageUrl(fileId, AppwriteManager.BUCKET_BIKES_ID)
+                                        Log.d("ProfileScreen", "Foto moto subida: $remoteUrl")
 
-                                        // 2. Actualizar en la Nube
-                                        appwrite.updateUserProfile(
-                                            userId = userIdRemote,
-                                            name = user.name,
-                                            level = user.level,
-                                            bikeModel = user.bikeModel,
-                                            bikeSpecs = user.bikeSpecs,
-                                            bikeYear = user.bikeYear,
-                                            bikeColor = user.bikeColor,
-                                            bikePic = fileId // Guardar solo el ID
+                                        val userId = authManager.getCurrentUserId()
+                                        if (userId == null) return@launch
+
+                                        // Primero obtenemos el perfil actual de la nube para no sobreescribir con datos viejos
+                                        val currentProfile = appwrite.getUserProfile(userId)
+                                        val profileData = currentProfile?.data ?: emptyMap()
+
+                                        val success = appwrite.updateUserProfile(
+                                            userId = userId,
+                                            name = (profileData["name"] as? String) ?: user.name,
+                                            level = (profileData["level"] as? String) ?: user.level,
+                                            bikeModel = (profileData["bikeModel"] as? String) ?: user.bikeModel,
+                                            bikeSpecs = (profileData["bikeSpecs"] as? String) ?: user.bikeSpecs,
+                                            bikeYear = (profileData["bikeYear"] as? String) ?: user.bikeYear,
+                                            bikeColor = (profileData["bikeColor"] as? String) ?: user.bikeColor,
+                                            bikePic = fileId
                                         )
                                         
-                                        // 3. Actualizar localmente
-                                        db.userDao().insertOrUpdate(user.copy(bikePictureUri = remoteUrl))
+                                        if (success) {
+                                            val latestUser = db.userDao().getUserProfileOnce() ?: user
+                                            db.userDao().insertOrUpdate(latestUser.copy(bikePictureUri = remoteUrl))
+                                            Toast.makeText(context, "¡Foto de la moto actualizada!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "Error al actualizar perfil en la nube", Toast.LENGTH_SHORT).show()
+                                        }
                                     }
                                 } catch (e: Exception) {
-                                    android.util.Log.e("ProfileScreen", "Error subiendo foto moto: ${e.message}")
+                                    Log.e("ProfileScreen", "Error subiendo foto moto: ${e.message}")
+                                    Toast.makeText(context, "Error al subir foto de la moto", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
@@ -380,14 +424,20 @@ fun ProfileHeader(user: UserEntity, roleInfo: Pair<String, String>?, onImageSele
                     },
                 contentAlignment = Alignment.Center
             ) {
-                if (user.profilePictureUri != null) {
-                    AsyncImage(
-                        model = user.profilePictureUri,
-                        contentDescription = "Foto de perfil",
-                        modifier = Modifier.fillMaxSize().clip(CircleShape),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
+                val profileUri = user.profilePictureUri
+                Log.d("ProfileScreen", "ProfileHeader loading URI: $profileUri")
+                        if (!profileUri.isNullOrBlank() && profileUri != "null") {
+                            AsyncImage(
+                                model = profileUri,
+                                contentDescription = "Foto de perfil",
+                                modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                contentScale = ContentScale.Crop,
+                                onError = { state ->
+                                    Log.e("ProfileScreen", "Error cargando perfil: ${state.result.throwable.message}")
+                                },
+                                error = remember { androidx.compose.ui.graphics.painter.ColorPainter(Color.LightGray) }
+                            )
+                        } else {
                     Icon(
                         Icons.Default.Person,
                         contentDescription = null,
@@ -418,37 +468,64 @@ fun ProfileHeader(user: UserEntity, roleInfo: Pair<String, String>?, onImageSele
         }
 
         if (roleInfo != null) {
-            Spacer(modifier = Modifier.height(12.dp))
+            val (role, groupName) = roleInfo
+            val rankStyle = when (role) {
+                "Presidente" -> Triple(Color(0xFFFFD700), Icons.Default.MilitaryTech, "Líder de Club")
+                "Vicepresidente" -> Triple(Color(0xFFC0C0C0), Icons.Default.Star, "Mando Directivo")
+                "Sargento de Armas" -> Triple(Color(0xFFB22222), Icons.Default.Security, "Disciplina")
+                "Secretario" -> Triple(Color(0xFF4682B4), Icons.Default.Description, "Administración")
+                "Tesorero" -> Triple(Color(0xFF2E8B57), Icons.Default.MonetizationOn, "Finanzas")
+                "Capitán de Ruta" -> Triple(Color(0xFFFF8C00), Icons.Default.Map, "Navegación")
+                "Prospecto" -> Triple(Color(0xFF808080), Icons.Default.NewReleases, "En Prueba")
+                else -> Triple(MaterialTheme.colorScheme.primary, Icons.Default.Shield, "Miembro")
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            
             Surface(
-                color = MaterialTheme.colorScheme.primary,
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.fillMaxWidth(),
-                tonalElevation = 4.dp,
-                shadowElevation = 2.dp
+                color = rankStyle.first.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(2.dp, rankStyle.first),
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
                     modifier = Modifier.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        Icons.Default.Shield,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(24.dp)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(rankStyle.first, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            rankStyle.second,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = role.uppercase(),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = rankStyle.first,
+                                fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = 1.sp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "• ${rankStyle.third}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.Gray
+                            )
+                        }
                         Text(
-                            text = roleInfo.first.uppercase(),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = Color.White,
-                            fontWeight = FontWeight.ExtraBold,
-                            letterSpacing = 1.sp
-                        )
-                        Text(
-                            text = roleInfo.second,
+                            text = groupName,
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.8f)
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
@@ -485,12 +562,18 @@ fun MyBikeSection(user: UserEntity, navController: NavController, onImageSelecte
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        if (user.bikePictureUri != null) {
+                        val bikeUri = user.bikePictureUri
+                        Log.d("ProfileScreen", "MyBikeSection loading URI: $bikeUri")
+                        if (!bikeUri.isNullOrBlank() && bikeUri != "null") {
                             AsyncImage(
-                                model = user.bikePictureUri,
+                                model = bikeUri,
                                 contentDescription = "Foto de tu moto",
                                 modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
+                                contentScale = ContentScale.Crop,
+                                onError = { state ->
+                                    Log.e("ProfileScreen", "Error cargando foto moto: ${state.result.throwable.message}")
+                                },
+                                error = remember { androidx.compose.ui.graphics.painter.ColorPainter(Color.DarkGray) }
                             )
                         } else {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -587,17 +670,13 @@ fun CityStamp(stamp: com.example.motoday.data.local.entities.PassportStampEntity
         label = "rotation"
     )
 
-    // Log para usar las variables y evitar advertencias
-    if (isVisible) {
-        // Las variables scale, alpha y rotation ya se usan en el Modifier
-    }
+    if (isVisible) { }
 
-    // Configuración personalizada según el sello
     val stampConfig = when (stamp.iconResName) {
-        "ic_stamp_machala" -> StampStyle(Color(0xFFFFD700), Icons.Default.Agriculture, "MACHALA") // Amarillo (Banano)
-        "ic_stamp_guayaquil" -> StampStyle(Color(0xFF00BFFF), Icons.Default.Anchor, "GUAYAQUIL") // Azul (Puerto)
-        "ic_stamp_cuenca" -> StampStyle(Color(0xFF8B4513), Icons.Default.Architecture, "CUENCA") // Café (Atenas del Ecuador)
-        "ic_stamp_quito" -> StampStyle(Color(0xFFD32F2F), Icons.Default.AccountBalance, "QUITO") // Rojo (Centro Histórico)
+        "ic_stamp_machala" -> StampStyle(Color(0xFFFFD700), Icons.Default.Agriculture, "MACHALA") 
+        "ic_stamp_guayaquil" -> StampStyle(Color(0xFF00BFFF), Icons.Default.Anchor, "GUAYAQUIL") 
+        "ic_stamp_cuenca" -> StampStyle(Color(0xFF8B4513), Icons.Default.Architecture, "CUENCA") 
+        "ic_stamp_quito" -> StampStyle(Color(0xFFD32F2F), Icons.Default.AccountBalance, "QUITO") 
         else -> StampStyle(Color(0xFF6200EE), Icons.Default.LocationCity, stamp.locationName.uppercase())
     }
 
@@ -780,9 +859,7 @@ fun AchievementItem(title: String, desc: String, isUnlocked: Boolean) {
         label = "achScale"
     )
 
-    if (isVisible) {
-        // isVisible ya se usa en scale
-    }
+    if (isVisible) { }
 
     LaunchedEffect(isUnlocked) {
         if (isUnlocked) isVisible = true

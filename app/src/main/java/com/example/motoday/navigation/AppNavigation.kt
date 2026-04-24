@@ -86,6 +86,13 @@ fun AppNavigation() {
                 SettingsScreen(navController)
             }
             composable(
+                route = Screen.GroupSettings.route,
+                arguments = listOf(navArgument("groupId") { type = NavType.StringType })
+            ) { backStackEntry ->
+                val groupId = backStackEntry.arguments?.getString("groupId") ?: ""
+                GroupSettingsScreen(navController, groupId)
+            }
+            composable(
                 route = Screen.RideDetail.route,
                 arguments = listOf(navArgument("rideId") { type = NavType.IntType })
             ) { backStackEntry ->

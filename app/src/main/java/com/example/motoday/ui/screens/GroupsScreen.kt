@@ -31,6 +31,7 @@ import java.util.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
+import com.example.motoday.navigation.Screen
 import com.example.motoday.ui.components.BottomNavigationBar
 import kotlinx.coroutines.launch
 import com.example.motoday.data.remote.AppwriteManager
@@ -82,7 +83,6 @@ fun GroupsScreen(navController: NavController) {
     var selectedGroupId by remember { mutableStateOf<String?>(null) }
     var isExploring by remember { mutableStateOf(true) }
     var showCreateDialog by remember { mutableStateOf(false) }
-    var showEditDialog by remember { mutableStateOf(false) }
     var showMembersDialog by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     
@@ -268,50 +268,6 @@ fun GroupsScreen(navController: NavController) {
         )
     }
 
-    if (showEditDialog && selectedGroup != null) {
-        EditGroupDialog(
-            currentName = selectedGroup.data["name"] as? String ?: "",
-            currentPhotoUri = selectedGroup.data["photoUrl"] as? String,
-            onDismiss = { showEditDialog = false },
-            onUpdate = { name, uri ->
-                scope.launch {
-                    var finalPhotoUrl = uri
-                    // Si el URI es local (content://), hay que subirlo primero
-                    if (uri != null && uri.startsWith("content://")) {
-                        try {
-                            val inputStream = context.contentResolver.openInputStream(android.net.Uri.parse(uri))
-                            val bytes = inputStream?.readBytes()
-                            if (bytes != null) {
-                                val fileId = appwrite.uploadImage(
-                                    io.appwrite.models.InputFile.fromBytes(
-                                        bytes = bytes,
-                                        filename = "group_update_${selectedGroup.id}.jpg",
-                                        mimeType = "image/jpeg"
-                                    )
-                                )
-                                finalPhotoUrl = appwrite.getImageUrl(fileId)
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-                    }
-
-                    val success = appwrite.updateGroup(
-                        groupId = selectedGroup.id,
-                        name = name,
-                        photoUrl = finalPhotoUrl
-                    )
-                    if (success) {
-                        val remoteGroups = appwrite.getGroups()
-                        allGroups.clear()
-                        allGroups.addAll(remoteGroups)
-                    }
-                    showEditDialog = false
-                }
-            }
-        )
-    }
-
     if (showMembersDialog && selectedGroup != null) {
         val memberIds = (selectedGroup.data["members"] as? List<*>)?.filterIsInstance<String>() ?: emptyList()
         val rolesMap = getRolesMap(selectedGroup)
@@ -320,20 +276,9 @@ fun GroupsScreen(navController: NavController) {
         GroupMembersDialog(
             memberIds = memberIds,
             adminId = adminId,
-            currentUserId = currentUserId ?: "",
             roles = rolesMap,
             appwrite = appwrite,
-            onDismiss = { showMembersDialog = false },
-            onAssignRole = { userId, role ->
-                scope.launch {
-                    val success = appwrite.updateMemberRole(selectedGroup.id, userId, role)
-                    if (success) {
-                        val remoteGroups = appwrite.getGroups()
-                        allGroups.clear()
-                        allGroups.addAll(remoteGroups)
-                    }
-                }
-            }
+            onDismiss = { showMembersDialog = false }
         )
     }
 
@@ -361,24 +306,24 @@ fun GroupsScreen(navController: NavController) {
                             expanded = showMenu,
                             onDismissRequest = { showMenu = false }
                         ) {
-                            val isAdmin = currentUserId == selectedGroup?.data?.get("adminId")
+                            val isAdmin = selectedGroup?.data?.get("adminId") == currentUserId
                             if (isAdmin) {
                                 DropdownMenuItem(
-                                    text = { Text("Editar Grupo") },
+                                    text = { Text("Ajustes del Grupo") },
                                     onClick = {
                                         showMenu = false
-                                        showEditDialog = true
+                                        navController.navigate(Screen.GroupSettings.createRoute(selectedGroupId!!))
                                     },
-                                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) }
+                                    leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
                                 )
                             }
                             DropdownMenuItem(
-                                text = { Text("Info. del Grupo") },
+                                text = { Text("Ver Miembros") },
                                 onClick = {
                                     showMenu = false
                                     showMembersDialog = true
                                 },
-                                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) }
+                                leadingIcon = { Icon(Icons.Default.People, contentDescription = null) }
                             )
                             Divider()
                             DropdownMenuItem(
@@ -864,25 +809,17 @@ fun ChatBubble(msg: ChatMessage) {
 fun GroupMembersDialog(
     memberIds: List<String>,
     adminId: String,
-    currentUserId: String,
     roles: Map<String, String>,
     appwrite: AppwriteManager,
-    onDismiss: () -> Unit,
-    onAssignRole: (String, String?) -> Unit
+    onDismiss: () -> Unit
 ) {
     var membersProfiles by remember { mutableStateOf<List<Document<Map<String, Any>>>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
-    val isCurrentUserAdmin = currentUserId == adminId
     
-    // Estado local para actualización inmediata de la UI al asignar roles
-    val localRoles = remember { mutableStateMapOf<String, String>() }
+    val gson = remember { Gson() }
 
-    val availableRoles = listOf("Presidente", "Vicepresidente", "Sargento de Armas", "Secretario", "Tesorero", "Capitán de Ruta", "Prospecto")
-
-    LaunchedEffect(memberIds, roles) {
+    LaunchedEffect(memberIds) {
         membersProfiles = appwrite.getUsersProfiles(memberIds)
-        localRoles.clear()
-        roles.forEach { (k, v) -> localRoles[k] = v }
         isLoading = false
     }
 
@@ -900,9 +837,7 @@ fun GroupMembersDialog(
                             val name = profile.data["name"] as? String ?: "Motero"
                             val photoUrl = profile.data["profilePic"] as? String
                             val level = profile.data["level"] as? String ?: "Novato"
-                            val userRole = localRoles[userId]
-
-                            var showRoleMenu by remember { mutableStateOf(false) }
+                            val userRole = roles[userId]
 
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -917,7 +852,7 @@ fun GroupMembersDialog(
                                 ) {
                                     if (!photoUrl.isNullOrEmpty()) {
                                         AsyncImage(
-                                            model = photoUrl,
+                                            model = appwrite.getImageUrl(photoUrl),
                                             contentDescription = null,
                                             modifier = Modifier.fillMaxSize(),
                                             contentScale = ContentScale.Crop
@@ -978,46 +913,10 @@ fun GroupMembersDialog(
                                         }
                                     }
                                     Text(
-                                        text = if (userRole != null) "Miembro del Consejo" else level, 
+                                        text = level, 
                                         style = MaterialTheme.typography.labelSmall, 
                                         color = Color.Gray
                                     )
-                                }
-
-                                if (isCurrentUserAdmin && userId != currentUserId) {
-                                    Box {
-                                        IconButton(onClick = { showRoleMenu = true }) {
-                                            Icon(Icons.Default.AssignmentInd, contentDescription = "Asignar Rol")
-                                        }
-                                        DropdownMenu(
-                                            expanded = showRoleMenu,
-                                            onDismissRequest = { showRoleMenu = false }
-                                        ) {
-                                            availableRoles.forEach { role ->
-                                                DropdownMenuItem(
-                                                    text = { Text(role) },
-                                                    onClick = {
-                                                        // Actualización inmediata local
-                                                        localRoles[userId] = role
-                                                        onAssignRole(userId, role)
-                                                        showRoleMenu = false
-                                                    }
-                                                )
-                                            }
-                                            if (userRole != null) {
-                                                Divider()
-                                                DropdownMenuItem(
-                                                    text = { Text("Quitar Rol", color = Color.Red) },
-                                                    onClick = {
-                                                        // Actualización inmediata local
-                                                        localRoles.remove(userId)
-                                                        onAssignRole(userId, null)
-                                                        showRoleMenu = false
-                                                    }
-                                                )
-                                            }
-                                        }
-                                    }
                                 }
                             }
                         }
@@ -1031,68 +930,6 @@ fun GroupMembersDialog(
     )
 }
 
-@Composable
-fun EditGroupDialog(
-    currentName: String,
-    currentPhotoUri: String?,
-    onDismiss: () -> Unit,
-    onUpdate: (String, String?) -> Unit
-) {
-    var name by remember { mutableStateOf(currentName) }
-    var photoUri by remember { mutableStateOf(currentPhotoUri) }
-    
-    val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri ->
-        if (uri != null) photoUri = uri.toString()
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Editar Grupo") },
-        text = {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(
-                    modifier = Modifier
-                        .size(80.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
-                        .clickable { launcher.launch("image/*") },
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (photoUri != null) {
-                        AsyncImage(
-                            model = photoUri,
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Icon(Icons.Default.PhotoCamera, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    }
-                }
-                TextButton(onClick = { launcher.launch("image/*") }) {
-                    Text("Cambiar foto")
-                }
-                
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Nombre del grupo") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            Button(onClick = { if(name.isNotBlank()) onUpdate(name, photoUri) }) { Text("Guardar") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancelar") }
-        }
-    )
-}
 
 @Composable
 fun GroupIconCircle(name: String, photoUrl: String?, isSelected: Boolean, onClick: () -> Unit) {

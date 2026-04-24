@@ -1,6 +1,9 @@
 package com.example.motoday.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Environment
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -18,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,6 +33,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.example.motoday.data.local.AppDatabase
@@ -38,6 +44,10 @@ import io.appwrite.models.InputFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,21 +61,65 @@ fun CreatePostScreen(navController: NavController) {
     var caption by remember { mutableStateOf("") }
     var selectedImages by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
+    var tempCameraUri by remember { mutableStateOf<Uri?>(null) }
 
     val scrollState = rememberScrollState()
 
     // Selector Múltiple (Máximo 3)
-    val launcher = rememberLauncherForActivityResult(
+    val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 3),
-        onResult = { uris -> 
-            if (uris.size > 3) {
+        onResult = { uris ->
+            val total = selectedImages.size + uris.size
+            if (total > 3) {
                 Toast.makeText(context, "Máximo 3 fotos permitidas", Toast.LENGTH_SHORT).show()
-                selectedImages = uris.take(3)
+                selectedImages = (selectedImages + uris).take(3)
             } else {
-                selectedImages = uris
+                selectedImages = selectedImages + uris
             }
         }
     )
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture(),
+        onResult = { success ->
+            if (success) {
+                tempCameraUri?.let { uri ->
+                    selectedImages = (selectedImages + uri).take(3)
+                }
+            }
+        }
+    )
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { isGranted ->
+            if (isGranted) {
+                val uri = createTempImageUri(context)
+                tempCameraUri = uri
+                cameraLauncher.launch(uri)
+            } else {
+                Toast.makeText(context, "Permiso de cámara denegado", Toast.LENGTH_SHORT).show()
+            }
+        }
+    )
+
+    fun openCamera() {
+        if (selectedImages.size >= 3) {
+            Toast.makeText(context, "Máximo 3 fotos alcanzado", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        when (PackageManager.PERMISSION_GRANTED) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) -> {
+                val uri = createTempImageUri(context)
+                tempCameraUri = uri
+                cameraLauncher.launch(uri)
+            }
+            else -> {
+                permissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -90,20 +144,39 @@ fun CreatePostScreen(navController: NavController) {
         ) {
             // Contenedor de Imágenes Seleccionadas
             if (selectedImages.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(200.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.LightGray.copy(alpha = 0.3f))
-                        .clickable {
-                            launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                        },
-                    contentAlignment = Alignment.Center
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(200.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.AddPhotoAlternate, null, modifier = Modifier.size(48.dp), tint = Color.Gray)
-                        Text("Añadir fotos de la ruta (Máx. 3)", color = Color.Gray)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.LightGray.copy(alpha = 0.3f))
+                            .clickable {
+                                galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.AddPhotoAlternate, null, modifier = Modifier.size(48.dp), tint = Color.Gray)
+                            Text("Galería", color = Color.Gray)
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.LightGray.copy(alpha = 0.3f))
+                            .clickable { openCamera() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.PhotoCamera, null, modifier = Modifier.size(48.dp), tint = Color.Gray)
+                            Text("Cámara", color = Color.Gray)
+                        }
                     }
                 }
             } else {
@@ -129,16 +202,29 @@ fun CreatePostScreen(navController: NavController) {
                     }
                     if (selectedImages.size < 3) {
                         item {
-                            Box(
-                                modifier = Modifier
-                                    .width(100.dp)
-                                    .fillMaxHeight()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(Color.LightGray.copy(alpha = 0.3f))
-                                    .clickable { launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(Icons.Default.AddPhotoAlternate, null, tint = Color.Gray)
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(100.dp)
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color.LightGray.copy(alpha = 0.3f))
+                                        .clickable { galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.AddPhotoAlternate, null, tint = Color.Gray)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .width(100.dp)
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color.LightGray.copy(alpha = 0.3f))
+                                        .clickable { openCamera() },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.PhotoCamera, null, tint = Color.Gray)
+                                }
                             }
                         }
                     }
@@ -177,8 +263,8 @@ fun CreatePostScreen(navController: NavController) {
                                     val fileName = "post_${userId}_${System.currentTimeMillis()}_$index.jpg"
                                     val inputFile = InputFile.fromBytes(bytes, fileName, "image/jpeg")
                                     
-                                    val fileId = appwrite.uploadImage(inputFile)
-                                    uploadedUrls.add(appwrite.getImageUrl(fileId))
+                                    val fileId = appwrite.uploadImage(inputFile, AppwriteManager.BUCKET_POSTS_ID)
+                                    uploadedUrls.add(appwrite.getImageUrl(fileId, AppwriteManager.BUCKET_POSTS_ID))
                                 }
 
                                 // Crear documento con el ARRAY de URLs
@@ -220,4 +306,15 @@ fun CreatePostScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
+}
+
+private fun createTempImageUri(context: android.content.Context): Uri {
+    val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+    val storageDir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+    val file = File.createTempFile("JPEG_${timeStamp}_", ".jpg", storageDir)
+    return FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file
+    )
 }

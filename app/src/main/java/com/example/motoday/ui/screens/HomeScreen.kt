@@ -106,8 +106,8 @@ fun HomeScreen(navController: NavController) {
                             val fileName = "story_${currentUserId}_${System.currentTimeMillis()}.jpg"
                             val inputFile = io.appwrite.models.InputFile.fromBytes(bytes, fileName, "image/jpeg")
                             
-                            val fileId = appwrite.uploadImage(inputFile)
-                            val imageUrl = appwrite.getImageUrl(fileId)
+                            val fileId = appwrite.uploadImage(inputFile, AppwriteManager.BUCKET_STORIES_ID)
+                            val imageUrl = appwrite.getImageUrl(fileId, AppwriteManager.BUCKET_STORIES_ID)
                             
                             appwrite.createStory(
                                 userId = currentUserId,

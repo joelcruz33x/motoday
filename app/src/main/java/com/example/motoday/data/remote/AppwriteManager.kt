@@ -1,6 +1,7 @@
 package com.example.motoday.data.remote
 
 import android.content.Context
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import io.appwrite.Client
@@ -24,14 +25,23 @@ class AppwriteManager private constructor(context: Context) {
     val gson = Gson()
 
     companion object {
+        // IDs Reales confirmados por Joel
         const val DATABASE_ID = "69e81a9500157d642919"
-        const val COLLECTION_PROFILES_ID = "profiles"
-        const val COLLECTION_GROUPS_ID = "groups"
-        const val COLLECTION_MESSAGES_ID = "messages"
+        const val COLLECTION_USERS_ID = "profiles"
         const val COLLECTION_POSTS_ID = "posts"
+        const val COLLECTION_RIDES_ID = "rides"
+        const val COLLECTION_GROUPS_ID = "groups"
         const val COLLECTION_STORIES_ID = "stories"
-        const val COLLECTION_STAMPS_ID = "stamps"
+        
         const val BUCKET_PROFILES_ID = "69e844ea000bbe88673c"
+        const val BUCKET_BIKES_ID = "69e844ea000bbe88673c" 
+        const val BUCKET_POSTS_ID = "69e844ea000bbe88673c"
+        const val BUCKET_STORIES_ID = "69e844ea000bbe88673c"
+
+        // Para compatibilidad con el código existente que usaba estas constantes:
+        const val COLLECTION_PROFILES_ID = COLLECTION_USERS_ID 
+        const val COLLECTION_MESSAGES_ID = "messages" // No proporcionado, mantenemos el anterior o lo buscamos
+        const val COLLECTION_STAMPS_ID = "stamps"     // No proporcionado
 
         @Volatile
         private var INSTANCE: AppwriteManager? = null
@@ -46,8 +56,9 @@ class AppwriteManager private constructor(context: Context) {
     // --- PERFILES ---
     suspend fun getUserProfile(userId: String): Document<Map<String, Any>>? {
         return try {
-            databases.getDocument(DATABASE_ID, COLLECTION_PROFILES_ID, userId)
+            databases.getDocument(DATABASE_ID, COLLECTION_USERS_ID, userId)
         } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error getUserProfile: ${e.message}")
             null
         }
     }
@@ -65,23 +76,27 @@ class AppwriteManager private constructor(context: Context) {
         totalKm: Int? = null,
         rides: Int? = null
     ): Boolean {
+        val data = mutableMapOf<String, Any>(
+            "name" to name,
+            "level" to level,
+            "bikeModel" to bikeModel,
+            "bikeSpecs" to bikeSpecs,
+            "bikeYear" to bikeYear,
+            "bikeColor" to bikeColor
+        )
+        if (profilePic != null) data["profilePic"] = profilePic
+        if (bikePic != null) data["bikePic"] = bikePic
+        if (totalKm != null) data["totalKm"] = totalKm
+        if (rides != null) data["rides"] = rides
+
         return try {
-            val data = mutableMapOf<String, Any>(
-                "name" to name,
-                "level" to level,
-                "bikeModel" to bikeModel,
-                "bikeSpecs" to bikeSpecs,
-                "bikeYear" to bikeYear,
-                "bikeColor" to bikeColor
-            )
-            if (profilePic != null) data["profilePic"] = profilePic
-            if (bikePic != null) data["bikePic"] = bikePic
-            if (totalKm != null) data["totalKm"] = totalKm
-            if (rides != null) data["rides"] = rides
-            
-            databases.updateDocument(DATABASE_ID, COLLECTION_PROFILES_ID, userId, data)
+            databases.updateDocument(DATABASE_ID, COLLECTION_USERS_ID, userId, data)
             true
         } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error updateUserProfile (Atributos: ${data.keys}): ${e.message}")
+            if (e is io.appwrite.exceptions.AppwriteException) {
+                Log.e("AppwriteManager", "Código: ${e.code}, Respuesta: ${e.response}")
+            }
             false
         }
     }
@@ -91,7 +106,7 @@ class AppwriteManager private constructor(context: Context) {
             if (userIds.isEmpty()) return emptyList()
             databases.listDocuments(
                 databaseId = DATABASE_ID,
-                collectionId = COLLECTION_PROFILES_ID,
+                collectionId = COLLECTION_USERS_ID,
                 queries = listOf(Query.equal("\$id", userIds))
             ).documents
         } catch (e: Exception) {
@@ -125,7 +140,7 @@ class AppwriteManager private constructor(context: Context) {
             )
             true
         } catch (e: Exception) {
-            android.util.Log.e("AppwriteSync", "Error al sincronizar sello: ${e.message}")
+            Log.e("AppwriteSync", "Error al sincronizar sello: ${e.message}")
             false
         }
     }
@@ -145,12 +160,15 @@ class AppwriteManager private constructor(context: Context) {
     // --- POSTS ---
     suspend fun getPosts(): List<Document<Map<String, Any>>> {
         return try {
-            databases.listDocuments(
+            val response = databases.listDocuments(
                 databaseId = DATABASE_ID,
                 collectionId = COLLECTION_POSTS_ID,
                 queries = listOf(Query.orderDesc("timestamp"))
-            ).documents
+            )
+            Log.d("AppwriteManager", "Posts recuperados: ${response.documents.size}")
+            response.documents
         } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error getPosts en colección $COLLECTION_POSTS_ID: ${e.message}")
             emptyList()
         }
     }
@@ -166,7 +184,7 @@ class AppwriteManager private constructor(context: Context) {
                     "userName" to userName,
                     "userLevel" to userLevel,
                     "profilePic" to (profilePic ?: ""),
-                    "imageUrl" to imageUrls, // Nombre usado en HomeScreen
+                    "imageUrl" to imageUrls, 
                     "caption" to caption,
                     "timestamp" to timestamp,
                     "likes" to emptyList<String>()
@@ -174,6 +192,7 @@ class AppwriteManager private constructor(context: Context) {
             )
             response.id
         } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error createPost: ${e.message}")
             null
         }
     }
@@ -225,6 +244,14 @@ class AppwriteManager private constructor(context: Context) {
             databases.listDocuments(DATABASE_ID, COLLECTION_GROUPS_ID).documents
         } catch (e: Exception) {
             emptyList()
+        }
+    }
+
+    suspend fun getGroup(groupId: String): Document<Map<String, Any>>? {
+        return try {
+            databases.getDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId)
+        } catch (e: Exception) {
+            null
         }
     }
 
@@ -363,12 +390,16 @@ class AppwriteManager private constructor(context: Context) {
     }
 
     // --- ALMACENAMIENTO ---
-    suspend fun uploadImage(file: InputFile): String {
-        val response = storage.createFile(BUCKET_PROFILES_ID, UUID.randomUUID().toString(), file)
+    suspend fun uploadImage(file: InputFile, bucketId: String = BUCKET_POSTS_ID): String {
+        val response = storage.createFile(bucketId, ID.unique(), file)
         return response.id
     }
 
-    fun getImageUrl(fileId: String): String {
-        return "https://nyc.cloud.appwrite.io/v1/storage/buckets/$BUCKET_PROFILES_ID/files/$fileId/view?project=69e6836b00267f431c20"
+    fun getImageUrl(fileId: String, bucketId: String = BUCKET_POSTS_ID): String {
+        if (fileId.isBlank() || fileId == "null") return ""
+        // Si ya es una URL completa, no la construimos
+        if (fileId.startsWith("http")) return fileId
+        
+        return "https://nyc.cloud.appwrite.io/v1/storage/buckets/$bucketId/files/$fileId/view?project=69e6836b00267f431c20"
     }
 }

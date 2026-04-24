@@ -163,12 +163,12 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                         DetailRow(Icons.Default.MeetingRoom, "Encuentro: ${currentRide.meetingPoint}")
 
                         // Weather Section
-                        if (currentRide.endLat != 0.0) {
+                        if (currentRide.endLat != 0.0 && currentRide.endLat != null) {
                             Spacer(modifier = Modifier.height(12.dp))
                             WeatherSection(lat = currentRide.endLat, lon = currentRide.endLng)
                         }
 
-                        if (currentRide.startLat != 0.0) {
+                        if (currentRide.startLat != 0.0 && currentRide.startLat != null) {
                             Spacer(modifier = Modifier.height(12.dp))
                             Button(
                                 onClick = {
@@ -231,7 +231,7 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                                     db.rideDao().updateRide(currentRide.copy(status = "COMPLETED"))
                                     
                                     // 3. Actualizar perfil de usuario (kms y rutas completadas)
-                                    val user = db.userDao().getUserProfile().firstOrNull()
+                                    val user = db.userDao().getUserProfileOnce()
                                     user?.let {
                                         val newKms = it.totalKilometers + distanceKm
                                         val newRides = it.ridesCompleted + 1
