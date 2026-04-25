@@ -26,6 +26,12 @@ fun ExploreScreen(navController: NavController) {
     val db = AppDatabase.getDatabase(context)
     val rides by db.rideDao().getAllRides().collectAsState(initial = emptyList())
 
+    // Limpieza automática de rutas finalizadas hace más de 1 hora
+    LaunchedEffect(Unit) {
+        val oneHourAgo = System.currentTimeMillis() - (60 * 60 * 1000)
+        db.rideDao().cleanupOldRides(oneHourAgo)
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -71,6 +77,8 @@ fun ExploreScreen(navController: NavController) {
 
                 RideCard(
                     title = ride.title,
+                    difficulty = ride.difficulty,
+                    terrainType = ride.terrainType,
                     date = dateString,
                     location = "Desde: ${ride.startLocation} hasta ${ride.endLocation}",
                     status = when(ride.status) {
@@ -91,15 +99,85 @@ fun ExploreScreen(navController: NavController) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RideCard(title: String, date: String, location: String, status: String, participantsCount: Int, onClick: () -> Unit) {
+fun RideCard(
+    title: String,
+    difficulty: String,
+    terrainType: String,
+    date: String,
+    location: String,
+    status: String,
+    participantsCount: Int,
+    onClick: () -> Unit
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         onClick = onClick
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(text = title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+            // Título arriba
+            Text(
+                text = title,
+                fontWeight = FontWeight.ExtraBold,
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            // Fila de etiquetas y estado
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val diffColor = when (difficulty) {
+                        "Fácil" -> Color(0xFF4CAF50)
+                        "Intermedio" -> Color(0xFFFF9800)
+                        "Difícil" -> Color(0xFFF44336)
+                        else -> MaterialTheme.colorScheme.primary
+                    }
+                    
+                    // Etiqueta de Nivel (Dificultad)
+                    Surface(
+                        color = diffColor,
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Icon(Icons.Default.TrendingUp, null, modifier = Modifier.size(12.dp), tint = Color.White)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Nivel: $difficulty",
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    // Etiqueta de Terreno (Gris con texto blanco)
+                    Surface(
+                        color = Color(0xFF757575), // Gris oscuro para contraste
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Icon(Icons.Default.Landscape, null, modifier = Modifier.size(12.dp), tint = Color.White)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Terreno: $terrainType",
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
                 Badge(
                     containerColor = when (status) {
                         "Asistiré" -> Color(0xFF4CAF50)
@@ -111,24 +189,24 @@ fun RideCard(title: String, date: String, location: String, status: String, part
                 ) {
                     Text(
                         text = status,
-                        color = when (status) {
-                            "Asistiré", "Finalizada", "Programada" -> Color.White
-                            else -> Color(0xFF6200EE)
-                        },
-                        fontWeight = FontWeight.Bold
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 4.dp)
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(8.dp))
+
+            Spacer(modifier = Modifier.height(12.dp))
+            
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.DateRange, contentDescription = null, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.DateRange, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.Gray)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(text = date, style = MaterialTheme.typography.bodySmall)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.Gray)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(text = location, style = MaterialTheme.typography.bodySmall)
+                Text(text = location, style = MaterialTheme.typography.bodySmall, maxLines = 1)
             }
             
             Spacer(modifier = Modifier.height(8.dp))
@@ -147,10 +225,7 @@ fun RideCard(title: String, date: String, location: String, status: String, part
             Button(
                 onClick = onClick,
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = Color(0xFF6200EE)
-                )
+                shape = RoundedCornerShape(8.dp)
             ) {
                 Text("Ver Detalles de la Ruta", fontWeight = FontWeight.Bold)
             }

@@ -18,8 +18,8 @@ fun BottomNavigationBar(navController: NavController) {
         
         val items = listOf(
             Triple(Screen.Home.route, Icons.Default.Home, "Inicio"),
-            Triple(Screen.Explore.route, Icons.Default.Search, "Explorar"),
-            Triple(Screen.Groups.route, Icons.Default.Menu, "Grupos"),
+            Triple(Screen.Explore.route, Icons.Default.Map, "Rutas"),
+            Triple(Screen.Groups.route, Icons.Default.Groups, "Motoclubs"),
             Triple(Screen.Profile.route, Icons.Default.Person, "Perfil")
         )
 

@@ -12,6 +12,8 @@ import com.example.motoday.data.local.dao.RideDao
 import com.example.motoday.data.local.dao.SeenStoryDao
 import com.example.motoday.data.local.dao.StoryDao
 import com.example.motoday.data.local.dao.UserDao
+import com.example.motoday.data.local.dao.BikeDao
+import com.example.motoday.data.local.dao.BikePhotoDao
 import com.example.motoday.data.local.entities.ContactEntity
 import com.example.motoday.data.local.entities.MaintenanceEntity
 import com.example.motoday.data.local.entities.PassportStampEntity
@@ -20,12 +22,16 @@ import com.example.motoday.data.local.entities.RideEntity
 import com.example.motoday.data.local.entities.SeenStoryEntity
 import com.example.motoday.data.local.entities.StoryEntity
 import com.example.motoday.data.local.entities.UserEntity
+import com.example.motoday.data.local.entities.BikeEntity
+import com.example.motoday.data.local.entities.BikePhotoEntity
 
-@Database(entities = [PostEntity::class, RideEntity::class, UserEntity::class, ContactEntity::class, MaintenanceEntity::class, PassportStampEntity::class, StoryEntity::class, SeenStoryEntity::class], version = 19)
+@Database(entities = [PostEntity::class, RideEntity::class, UserEntity::class, ContactEntity::class, MaintenanceEntity::class, PassportStampEntity::class, StoryEntity::class, SeenStoryEntity::class, BikeEntity::class, BikePhotoEntity::class], version = 30)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun postDao(): PostDao
     abstract fun rideDao(): RideDao
     abstract fun userDao(): UserDao
+    abstract fun bikeDao(): BikeDao
+    abstract fun bikePhotoDao(): BikePhotoDao
     abstract fun contactDao(): ContactDao
     abstract fun maintenanceDao(): MaintenanceDao
     abstract fun passportDao(): PassportDao

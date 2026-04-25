@@ -1,5 +1,7 @@
 package com.example.motoday.ui.screens
 
+import android.content.Intent
+import android.util.Log
 import android.Manifest
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -69,6 +71,18 @@ fun CreatePostScreen(navController: NavController) {
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 3),
         onResult = { uris ->
+            uris.forEach { uri ->
+                try {
+                    if (uri.scheme == "content") {
+                        context.contentResolver.takePersistableUriPermission(
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                    }
+                } catch (e: Exception) {
+                    Log.e("CreatePostScreen", "Error persistiendo permiso: ${e.message}")
+                }
+            }
             val total = selectedImages.size + uris.size
             if (total > 3) {
                 Toast.makeText(context, "Máximo 3 fotos permitidas", Toast.LENGTH_SHORT).show()

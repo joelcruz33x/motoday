@@ -14,7 +14,7 @@ import io.appwrite.services.Databases
 import io.appwrite.services.Storage
 import java.util.UUID
 
-class AppwriteManager private constructor(context: Context) {
+class AppwriteManager(context: Context) {
     val client = Client(context)
         .setEndpoint("https://nyc.cloud.appwrite.io/v1")
         .setProject("69e6836b00267f431c20") 
@@ -32,11 +32,16 @@ class AppwriteManager private constructor(context: Context) {
         const val COLLECTION_RIDES_ID = "rides"
         const val COLLECTION_GROUPS_ID = "groups"
         const val COLLECTION_STORIES_ID = "stories"
+        const val COLLECTION_CONTACTS_ID = "contacts"
+        const val COLLECTION_MAINTENANCE_ID = "maintenance"
+        const val COLLECTION_GARAGE_ID = "motos"
+        const val COLLECTION_BIKE_PHOTOS_ID = "bike_photos"
         
         const val BUCKET_PROFILES_ID = "69e844ea000bbe88673c"
         const val BUCKET_BIKES_ID = "69e844ea000bbe88673c" 
         const val BUCKET_POSTS_ID = "69e844ea000bbe88673c"
         const val BUCKET_STORIES_ID = "69e844ea000bbe88673c"
+        const val BUCKET_GROUPS_ID = "69e844ea000bbe88673c"
 
         // Para compatibilidad con el código existente que usaba estas constantes:
         const val COLLECTION_PROFILES_ID = COLLECTION_USERS_ID 
@@ -74,7 +79,8 @@ class AppwriteManager private constructor(context: Context) {
         profilePic: String? = null,
         bikePic: String? = null,
         totalKm: Int? = null,
-        rides: Int? = null
+        rides: Int? = null,
+        isIndependent: Boolean? = null
     ): Boolean {
         val data = mutableMapOf<String, Any>(
             "name" to name,
@@ -88,6 +94,7 @@ class AppwriteManager private constructor(context: Context) {
         if (bikePic != null) data["bikePic"] = bikePic
         if (totalKm != null) data["totalKm"] = totalKm
         if (rides != null) data["rides"] = rides
+        if (isIndependent != null) data["isIndependent"] = isIndependent
 
         return try {
             databases.updateDocument(DATABASE_ID, COLLECTION_USERS_ID, userId, data)
@@ -115,6 +122,17 @@ class AppwriteManager private constructor(context: Context) {
     }
 
     // --- SELLOS / PASAPORTE ---
+    suspend fun syncStamp(userId: String, stamp: com.example.motoday.data.local.entities.PassportStampEntity): Boolean {
+        return syncStamp(
+            userId = userId,
+            rideId = stamp.rideId,
+            rideTitle = stamp.rideTitle,
+            locationName = stamp.locationName,
+            iconResName = stamp.iconResName,
+            date = stamp.date
+        )
+    }
+
     suspend fun syncStamp(
         userId: String,
         rideId: Int,
@@ -212,9 +230,49 @@ class AppwriteManager private constructor(context: Context) {
     // --- HISTORIAS ---
     suspend fun getActiveStories(): List<Document<Map<String, Any>>> {
         return try {
-            databases.listDocuments(DATABASE_ID, COLLECTION_STORIES_ID).documents
+            val sixHoursAgo = System.currentTimeMillis() - (6 * 60 * 60 * 1000)
+            databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_STORIES_ID,
+                queries = listOf(Query.greaterThan("timestamp", sixHoursAgo))
+            ).documents
         } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error getActiveStories: ${e.message}")
             emptyList()
+        }
+    }
+
+    suspend fun cleanupOldStories(userId: String): Int {
+        return try {
+            val sixHoursAgo = System.currentTimeMillis() - (6 * 60 * 60 * 1000)
+            val oldStories = databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_STORIES_ID,
+                queries = listOf(
+                    Query.equal("userId", userId),
+                    Query.lessThan("timestamp", sixHoursAgo)
+                )
+            ).documents
+
+            var deletedCount = 0
+            oldStories.forEach { doc ->
+                val storyId = doc.id
+                val imageUrl = doc.data["imageUrl"] as? String
+                val fileId = extractFileIdFromUrl(imageUrl)
+
+                // Borrar documento
+                databases.deleteDocument(DATABASE_ID, COLLECTION_STORIES_ID, storyId)
+                
+                // Borrar archivo del storage si existe
+                if (fileId != null) {
+                    deleteFile(fileId, BUCKET_STORIES_ID)
+                }
+                deletedCount++
+            }
+            deletedCount
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error cleanupOldStories: ${e.message}")
+            0
         }
     }
 
@@ -318,7 +376,77 @@ class AppwriteManager private constructor(context: Context) {
             val updatedMembers = currentMembers.toMutableList()
             if (!updatedMembers.contains(userId)) {
                 updatedMembers.add(userId)
-                databases.updateDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId, mapOf("members" to updatedMembers))
+                
+                // Al unirse, asignar rol de Prospecto por defecto
+                val doc = databases.getDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId)
+                val rolesJson = doc.data["roles"] as? String ?: "{}"
+                val type = object : TypeToken<MutableMap<String, String>>() {}.type
+                val currentRoles: MutableMap<String, String> = gson.fromJson(rolesJson, type) ?: mutableMapOf()
+                currentRoles[userId] = "Prospecto"
+                
+                databases.updateDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId, mapOf(
+                    "members" to updatedMembers,
+                    "roles" to gson.toJson(currentRoles)
+                ))
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun requestJoinGroup(groupId: String, userId: String): Boolean {
+        return try {
+            val doc = databases.getDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId)
+            val requests = (doc.data["requests"] as? List<*>)?.map { it.toString() }?.toMutableList() ?: mutableListOf()
+            if (!requests.contains(userId)) {
+                requests.add(userId)
+                databases.updateDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId, mapOf("requests" to requests))
+            }
+            true
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error requestJoinGroup: ${e.message}")
+            false
+        }
+    }
+
+    suspend fun approveJoinRequest(groupId: String, userId: String): Boolean {
+        return try {
+            val doc = databases.getDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId)
+            val requests = (doc.data["requests"] as? List<*>)?.map { it.toString() }?.toMutableList() ?: mutableListOf()
+            val members = (doc.data["members"] as? List<*>)?.map { it.toString() }?.toMutableList() ?: mutableListOf()
+            
+            if (requests.contains(userId)) {
+                requests.remove(userId)
+                if (!members.contains(userId)) {
+                    members.add(userId)
+                }
+                
+                val rolesJson = doc.data["roles"] as? String ?: "{}"
+                val type = object : TypeToken<MutableMap<String, String>>() {}.type
+                val currentRoles: MutableMap<String, String> = gson.fromJson(rolesJson, type) ?: mutableMapOf()
+                currentRoles[userId] = "Prospecto"
+
+                databases.updateDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId, mapOf(
+                    "requests" to requests,
+                    "members" to members,
+                    "roles" to gson.toJson(currentRoles)
+                ))
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun rejectJoinRequest(groupId: String, userId: String): Boolean {
+        return try {
+            val doc = databases.getDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId)
+            val requests = (doc.data["requests"] as? List<*>)?.map { it.toString() }?.toMutableList() ?: mutableListOf()
+            
+            if (requests.contains(userId)) {
+                requests.remove(userId)
+                databases.updateDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId, mapOf("requests" to requests))
             }
             true
         } catch (e: Exception) {
@@ -347,9 +475,28 @@ class AppwriteManager private constructor(context: Context) {
             val type = object : TypeToken<MutableMap<String, String>>() {}.type
             val currentRoles: MutableMap<String, String> = gson.fromJson(rolesJson, type) ?: mutableMapOf()
             
-            if (role == null) currentRoles.remove(userId) else currentRoles[userId] = role
+            val updateData = mutableMapOf<String, Any>()
 
-            databases.updateDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId, mapOf("roles" to gson.toJson(currentRoles)))
+            if (role == null) {
+                currentRoles.remove(userId)
+            } else {
+                // Si el rol es único (no "Miembro"), quitárselo a quien lo tenga
+                if (role != "Miembro") {
+                    val previousOwner = currentRoles.filterValues { it == role }.keys.firstOrNull()
+                    if (previousOwner != null && previousOwner != userId) {
+                        currentRoles[previousOwner] = "Miembro"
+                    }
+                }
+                currentRoles[userId] = role
+                
+                // Si se asigna el rol de Presidente, transferir también la administración del grupo
+                if (role == "Presidente") {
+                    updateData["adminId"] = userId
+                }
+            }
+
+            updateData["roles"] = gson.toJson(currentRoles)
+            databases.updateDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId, updateData)
             true
         } catch (e: Exception) {
             false
@@ -389,10 +536,206 @@ class AppwriteManager private constructor(context: Context) {
         }
     }
 
+    // --- CONTACTOS DE EMERGENCIA ---
+    suspend fun syncContact(userId: String, name: String, phone: String, relation: String): Boolean {
+        return try {
+            databases.createDocument(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_CONTACTS_ID,
+                documentId = ID.unique(),
+                data = mapOf(
+                    "userId" to userId,
+                    "name" to name,
+                    "phoneNumber" to phone,
+                    "relationship" to relation
+                )
+            )
+            true
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error syncContact: ${e.message}")
+            false
+        }
+    }
+
+    suspend fun getUserContacts(userId: String): List<Document<Map<String, Any>>> {
+        return try {
+            databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_CONTACTS_ID,
+                queries = listOf(Query.equal("userId", userId))
+            ).documents
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun deleteRemoteContact(documentId: String): Boolean {
+        return try {
+            databases.deleteDocument(DATABASE_ID, COLLECTION_CONTACTS_ID, documentId)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    // --- HOJA DE VIDA (MANTENIMIENTO) ---
+    suspend fun syncMaintenance(userId: String, bikeId: String?, type: String, mileage: Int, description: String, cost: Double, date: Long): Boolean {
+        return try {
+            databases.createDocument(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_MAINTENANCE_ID,
+                documentId = ID.unique(),
+                data = mutableMapOf(
+                    "userId" to userId,
+                    "type" to type,
+                    "mileage" to mileage,
+                    "description" to description,
+                    "cost" to cost,
+                    "date" to date
+                ).apply {
+                    if (bikeId != null) put("bikeId", bikeId)
+                }
+            )
+            true
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error syncMaintenance: ${e.message}")
+            false
+        }
+    }
+
+    suspend fun getUserMaintenanceLogs(userId: String): List<Document<Map<String, Any>>> {
+        return try {
+            databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_MAINTENANCE_ID,
+                queries = listOf(Query.equal("userId", userId), Query.orderDesc("date"))
+            ).documents
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    // --- GARAJE (MOTOS) ---
+    suspend fun syncBike(userId: String, model: String, year: String, color: String, specs: String, status: String, currentKm: Int, picId: String?): String? {
+        return try {
+            val response = databases.createDocument(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_GARAGE_ID,
+                documentId = ID.unique(),
+                data = mapOf(
+                    "userId" to userId,
+                    "model" to model,
+                    "year" to year,
+                    "color" to color,
+                    "specs" to specs,
+                    "status" to status,
+                    "currentKm" to currentKm,
+                    "bikePic" to (picId ?: "")
+                )
+            )
+            response.id
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error syncBike: ${e.message}")
+            null
+        }
+    }
+
+    suspend fun updateRemoteBike(bikeId: String, model: String, year: String, color: String, specs: String, status: String, currentKm: Int, picId: String?): Boolean {
+        return try {
+            val data = mutableMapOf<String, Any>(
+                "model" to model,
+                "year" to year,
+                "color" to color,
+                "specs" to specs,
+                "status" to status,
+                "currentKm" to currentKm
+            )
+            if (picId != null) data["bikePic"] = picId
+            databases.updateDocument(DATABASE_ID, COLLECTION_GARAGE_ID, bikeId, data)
+            true
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error updateRemoteBike: ${e.message}")
+            false
+        }
+    }
+
+    suspend fun deleteRemoteBike(bikeId: String): Boolean {
+        return try {
+            databases.deleteDocument(DATABASE_ID, COLLECTION_GARAGE_ID, bikeId)
+            true
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error deleteRemoteBike: ${e.message}")
+            false
+        }
+    }
+
+    suspend fun getUserBikes(userId: String): List<Document<Map<String, Any>>> {
+        return try {
+            databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_GARAGE_ID,
+                queries = listOf(Query.equal("userId", userId))
+            ).documents
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    // --- FOTOS DE MOTOS ---
+    suspend fun syncBikePhoto(bikeRemoteId: String, fileId: String): String? {
+        return try {
+            val response = databases.createDocument(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_BIKE_PHOTOS_ID,
+                documentId = ID.unique(),
+                data = mapOf(
+                    "bikeId" to bikeRemoteId,
+                    "fileId" to fileId
+                )
+            )
+            response.id
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error syncBikePhoto: ${e.message}")
+            null
+        }
+    }
+
+    suspend fun getBikePhotos(bikeRemoteId: String): List<Document<Map<String, Any>>> {
+        return try {
+            databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_BIKE_PHOTOS_ID,
+                queries = listOf(Query.equal("bikeId", bikeRemoteId))
+            ).documents
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun deleteBikePhotoDocument(documentId: String): Boolean {
+        return try {
+            databases.deleteDocument(DATABASE_ID, COLLECTION_BIKE_PHOTOS_ID, documentId)
+            true
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error deleteBikePhotoDocument: ${e.message}")
+            false
+        }
+    }
+
     // --- ALMACENAMIENTO ---
     suspend fun uploadImage(file: InputFile, bucketId: String = BUCKET_POSTS_ID): String {
         val response = storage.createFile(bucketId, ID.unique(), file)
         return response.id
+    }
+
+    suspend fun deleteFile(fileId: String, bucketId: String = BUCKET_BIKES_ID): Boolean {
+        return try {
+            storage.deleteFile(bucketId, fileId)
+            true
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error deleteFile: ${e.message}")
+            false
+        }
     }
 
     fun getImageUrl(fileId: String, bucketId: String = BUCKET_POSTS_ID): String {
@@ -401,5 +744,15 @@ class AppwriteManager private constructor(context: Context) {
         if (fileId.startsWith("http")) return fileId
         
         return "https://nyc.cloud.appwrite.io/v1/storage/buckets/$bucketId/files/$fileId/view?project=69e6836b00267f431c20"
+    }
+
+    fun extractFileIdFromUrl(url: String?): String? {
+        if (url.isNullOrBlank()) return null
+        if (!url.contains("/files/")) return null
+        return try {
+            url.substringAfter("/files/").substringBefore("/")
+        } catch (e: Exception) {
+            null
+        }
     }
 }

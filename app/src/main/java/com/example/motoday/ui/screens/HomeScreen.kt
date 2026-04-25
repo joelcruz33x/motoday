@@ -1,5 +1,7 @@
 package com.example.motoday.ui.screens
 
+import android.content.Intent
+import android.util.Log
 import android.net.Uri
 import android.text.format.DateUtils
 import android.widget.Toast
@@ -74,6 +76,9 @@ fun HomeScreen(navController: NavController) {
                 // Obtenemos los IDs de los miembros de mis grupos
                 myGroupsMemberIds = appwrite.getMyGroupsMemberIds(currentUserId)
                 
+                // Limpieza de historias antiguas del usuario actual
+                appwrite.cleanupOldStories(currentUserId)
+                
                 // Obtenemos todas las historias y filtramos por miembros de mis grupos
                 val allStories = appwrite.getActiveStories()
                 activeStories = allStories.filter { story ->
@@ -96,6 +101,18 @@ fun HomeScreen(navController: NavController) {
         contract = ActivityResultContracts.PickMultipleVisualMedia(),
         onResult = { uris ->
             if (uris.isNotEmpty()) {
+                uris.forEach { uri ->
+                    try {
+                        if (uri.scheme == "content") {
+                            context.contentResolver.takePersistableUriPermission(
+                                uri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            )
+                        }
+                    } catch (e: Exception) {
+                        Log.e("HomeScreen", "Error persistiendo permiso story: ${e.message}")
+                    }
+                }
                 isUploadingStory = true
                 scope.launch {
                     try {
@@ -194,14 +211,18 @@ fun HomeScreen(navController: NavController) {
                             is Number -> rawTimestamp.toLong()
                             else -> System.currentTimeMillis()
                         }
+                        
+                        val postUsername = data["userName"] as? String ?: "Motero"
+                        val postContent = data["caption"] as? String ?: ""
+                        val postImageUrls = (data["imageUrl"] as? List<String>) ?: emptyList()
 
                         PostItem(
-                            username = data["userName"] as? String ?: "Motero",
+                            username = postUsername,
                             userLevel = data["userLevel"] as? String ?: "Novato",
                             userProfilePic = data["profilePic"] as? String,
-                            content = data["caption"] as? String ?: "",
+                            content = postContent,
                             timestamp = timestamp,
-                            imageUrls = (data["imageUrl"] as? List<String>) ?: emptyList(),
+                            imageUrls = postImageUrls,
                             likesCount = likes.size,
                             isLiked = likes.contains(currentUserId),
                             onLikeClick = {
@@ -209,6 +230,20 @@ fun HomeScreen(navController: NavController) {
                                     appwrite.toggleLike(post.id, currentUserId, likes)
                                     loadData(showLoading = false) 
                                 }
+                            },
+                            onShareClick = {
+                                val shareText = buildString {
+                                    append("¡Mira lo que compartió $postUsername en MotoDay! 🏍️\n\n")
+                                    if (postContent.isNotBlank()) append("\"$postContent\"\n\n")
+                                    if (postImageUrls.isNotEmpty()) {
+                                        append("Ver foto: ${postImageUrls.first()}")
+                                    }
+                                }
+                                val intent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, shareText)
+                                }
+                                context.startActivity(Intent.createChooser(intent, "Compartir post"))
                             }
                         )
                     }
@@ -355,7 +390,8 @@ fun PostItem(
     imageUrls: List<String>,
     likesCount: Int,
     isLiked: Boolean,
-    onLikeClick: () -> Unit
+    onLikeClick: () -> Unit,
+    onShareClick: () -> Unit
 ) {
     var localIsLiked by remember(isLiked) { mutableStateOf(isLiked) }
     var localLikesCount by remember(likesCount) { mutableStateOf(likesCount) }
@@ -444,7 +480,7 @@ fun PostItem(
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("$localLikesCount likes", fontSize = 13.sp, color = if (localIsLiked) Color.Red else Color.Gray)
                 }
-                TextButton(onClick = { }) {
+                TextButton(onClick = onShareClick) {
                     Icon(Icons.Outlined.Share, null, modifier = Modifier.size(20.dp), tint = Color.Gray)
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Compartir", fontSize = 13.sp, color = Color.Gray)

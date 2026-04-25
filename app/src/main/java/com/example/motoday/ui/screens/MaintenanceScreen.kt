@@ -23,6 +23,10 @@ import com.example.motoday.data.local.entities.UserEntity
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
+import com.example.motoday.data.remote.AppwriteManager
+import com.example.motoday.data.remote.AuthManager
+import io.appwrite.models.Document
+import android.util.Log
 
 import com.example.motoday.ui.utils.NotificationHelper
 
@@ -36,6 +40,52 @@ fun MaintenanceScreen(navController: NavController) {
     val scope = rememberCoroutineScope()
     var showAddDialog by remember { mutableStateOf(false) }
     val notificationHelper = remember { NotificationHelper(context) }
+    val appwrite = remember { AppwriteManager.getInstance(context) }
+    val authManager = remember { AuthManager(context) }
+
+    val bikes by db.bikeDao().getAllBikes().collectAsState(initial = emptyList())
+    var selectedBikeId by remember { mutableStateOf<Int?>(null) }
+    
+    // Auto-seleccionar la moto principal basándonos en el perfil
+    LaunchedEffect(userProfile, bikes) {
+        if (selectedBikeId == null && userProfile != null && bikes.isNotEmpty()) {
+            val mainBike = bikes.find { it.model == userProfile?.bikeModel }
+            if (mainBike != null) {
+                selectedBikeId = mainBike.id
+            }
+        }
+    }
+
+    // Descargar mantenimientos remotos si local está vacío
+    LaunchedEffect(Unit) {
+        val userId = authManager.getCurrentUserId()
+        if (userId != null) {
+            val localLogs = db.maintenanceDao().getAllLogsOnce()
+            if (localLogs.isEmpty()) {
+                val remoteDocs = appwrite.getUserMaintenanceLogs(userId)
+                if (remoteDocs.isNotEmpty()) {
+                    val currentBikes = db.bikeDao().getAllBikesOnce()
+                    val entities = remoteDocs.map { doc ->
+                        val remoteBikeId = doc.data["bikeId"] as? String
+                        val localId = currentBikes.find { it.remoteId == remoteBikeId }?.id
+                        
+                        MaintenanceEntity(
+                            bikeId = localId,
+                            date = (doc.data["date"] as? Number)?.toLong() ?: System.currentTimeMillis(),
+                            type = doc.data["type"] as? String ?: "General",
+                            mileage = (doc.data["mileage"] as? Number)?.toInt() ?: 0,
+                            description = doc.data["description"] as? String ?: "",
+                            cost = (doc.data["cost"] as? Number)?.toDouble() ?: 0.0
+                        )
+                    }
+                    db.maintenanceDao().insertLogs(entities)
+                }
+            }
+        }
+    }
+
+    val bikesMap = remember(bikes) { bikes.associateBy({ it.id }, { it.model }) }
+    val selectedBike = bikes.find { it.id == selectedBikeId }
 
     Scaffold(
         topBar = {
@@ -61,20 +111,84 @@ fun MaintenanceScreen(navController: NavController) {
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { showAddDialog = true },
-                containerColor = Color(0xFF00FFFF), // PrimaryCyan
-                contentColor = Color(0xFF6200EE)    // Purple
+                containerColor = Color(0xFF00FFFF),
+                contentColor = Color(0xFF6200EE)
             ) {
                 Icon(Icons.Default.Add, contentDescription = "Nuevo Registro")
             }
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            // Panel de Salud de la Moto
-            HealthSummarySection(userProfile, logs)
+            if (bikes.isNotEmpty()) {
+                var expandedBikes by remember { mutableStateOf(false) }
+                Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    OutlinedButton(
+                        onClick = { expandedBikes = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.TwoWheeler, null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(selectedBike?.model ?: "Salud Global")
+                        Icon(Icons.Default.ArrowDropDown, null)
+                    }
+                    DropdownMenu(expanded = expandedBikes, onDismissRequest = { expandedBikes = false }) {
+                        DropdownMenuItem(
+                            text = { Text("General (Perfil)") },
+                            onClick = { selectedBikeId = null; expandedBikes = false }
+                        )
+                        bikes.forEach { bike ->
+                            DropdownMenuItem(
+                                text = { Text("${bike.model} (${bike.year})") },
+                                onClick = { selectedBikeId = bike.id; expandedBikes = false }
+                            )
+                        }
+                    }
+                }
+            }
+
+            HealthSummarySection(userProfile, logs, selectedBike, bikes) { type, mileage, bikeId ->
+                scope.launch {
+                    val finalBikeId = bikeId ?: (bikes.find { it.model == userProfile?.bikeModel }?.id)
+                    
+                    db.maintenanceDao().insertLog(
+                        MaintenanceEntity(
+                            bikeId = finalBikeId,
+                            date = System.currentTimeMillis(),
+                            type = type,
+                            mileage = mileage,
+                            description = "Reinicio rápido de $type",
+                            cost = 0.0
+                        )
+                    )
+                    
+                    val userId = authManager.getCurrentUserId()
+                    if (userId != null) {
+                        val bikeToSync = bikes.find { it.id == finalBikeId }
+                        val remoteBikeId = bikeToSync?.remoteId ?: finalBikeId?.toString()
+                        
+                        appwrite.syncMaintenance(
+                            userId = userId,
+                            bikeId = remoteBikeId,
+                            type = type,
+                            mileage = mileage,
+                            description = "Reinicio rápido de $type",
+                            cost = 0.0,
+                            date = System.currentTimeMillis()
+                        )
+                    }
+
+                    if (finalBikeId != null) {
+                        val bikeToUpdate = bikes.find { it.id == finalBikeId }
+                        if (bikeToUpdate != null && mileage > bikeToUpdate.currentKm) {
+                            db.bikeDao().insertOrUpdate(bikeToUpdate.copy(currentKm = mileage))
+                        }
+                    }
+                }
+            }
 
             if (logs.isEmpty()) {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text("No hay registros aún. ¡Añade tu mantenimiento!", color = Color.Gray)
+                    Text("No hay registros aún.", color = Color.Gray)
                 }
             } else {
                 LazyColumn(
@@ -87,7 +201,8 @@ fun MaintenanceScreen(navController: NavController) {
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                     items(logs) { log ->
-                        MaintenanceCard(log) {
+                        val bikeName = bikesMap[log.bikeId]
+                        MaintenanceCard(log, bikeName) {
                             scope.launch { db.maintenanceDao().deleteLog(log.id) }
                         }
                     }
@@ -97,12 +212,19 @@ fun MaintenanceScreen(navController: NavController) {
 
         if (showAddDialog) {
             AddMaintenanceDialog(
+                bikes = bikes,
                 onDismiss = { showAddDialog = false },
-                onSave = { type, mileage, desc, cost ->
+                onSave = { type, mileage, desc, cost, bikeId ->
                     scope.launch {
-                        // 1. Guardar el log de mantenimiento
+                        val finalBikeId = if (bikeId == null && userProfile != null) {
+                            bikes.find { it.model == userProfile?.bikeModel }?.id
+                        } else {
+                            bikeId
+                        }
+
                         db.maintenanceDao().insertLog(
                             MaintenanceEntity(
+                                bikeId = finalBikeId,
                                 date = System.currentTimeMillis(),
                                 type = type,
                                 mileage = mileage,
@@ -111,13 +233,26 @@ fun MaintenanceScreen(navController: NavController) {
                             )
                         )
                         
-                        // 2. ACTUALIZACIÓN AUTOMÁTICA: 
-                        // Si el kilometraje del mantenimiento es mayor al actual, actualizamos el perfil
-                        userProfile?.let { currentProfile ->
-                            if (mileage > currentProfile.totalKilometers) {
-                                db.userDao().insertOrUpdate(
-                                    currentProfile.copy(totalKilometers = mileage)
-                                )
+                        val userId = authManager.getCurrentUserId()
+                        if (userId != null) {
+                            val bikeToSync = bikes.find { it.id == finalBikeId }
+                            val remoteBikeId = bikeToSync?.remoteId ?: finalBikeId?.toString()
+                            
+                            appwrite.syncMaintenance(
+                                userId = userId,
+                                bikeId = remoteBikeId,
+                                type = type,
+                                mileage = mileage,
+                                description = desc,
+                                cost = cost,
+                                date = System.currentTimeMillis()
+                            )
+                        }
+                        
+                        if (finalBikeId != null) {
+                            val bikeToUpdate = bikes.find { it.id == finalBikeId }
+                            if (bikeToUpdate != null) {
+                                db.bikeDao().insertOrUpdate(bikeToUpdate.copy(currentKm = mileage))
                             }
                         }
 
@@ -130,12 +265,29 @@ fun MaintenanceScreen(navController: NavController) {
 }
 
 @Composable
-fun HealthSummarySection(user: UserEntity?, logs: List<MaintenanceEntity>) {
-    val currentKm = user?.totalKilometers ?: 0
+fun HealthSummarySection(
+    user: UserEntity?, 
+    logs: List<MaintenanceEntity>, 
+    selectedBike: com.example.motoday.data.local.entities.BikeEntity? = null, 
+    bikes: List<com.example.motoday.data.local.entities.BikeEntity> = emptyList(),
+    onQuickReset: (String, Int, Int?) -> Unit
+) {
+    val principalBike = if (selectedBike == null && user != null) {
+        bikes.find { it.model == user.bikeModel && it.year == user.bikeYear }
+    } else {
+        selectedBike
+    }
+
+    val currentKm = principalBike?.currentKm ?: (user?.totalKilometers ?: 0)
     
-    // Buscar último cambio de aceite y llantas
-    val lastOilKm = logs.filter { it.type == "Aceite" }.maxByOrNull { it.mileage }?.mileage ?: 0
-    val lastTiresKm = logs.filter { it.type == "Llantas" }.maxByOrNull { it.mileage }?.mileage ?: 0
+    val filteredLogs = if (principalBike != null) {
+        logs.filter { it.bikeId == principalBike.id }
+    } else {
+        logs
+    }
+    
+    val lastOilKm = filteredLogs.filter { it.type == "Aceite" }.maxByOrNull { it.mileage }?.mileage ?: 0
+    val lastTiresKm = filteredLogs.filter { it.type == "Llantas" }.maxByOrNull { it.mileage }?.mileage ?: 0
 
     val oilInterval = 3000
     val tiresInterval = 15000
@@ -150,31 +302,56 @@ fun HealthSummarySection(user: UserEntity?, logs: List<MaintenanceEntity>) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Estado de Salud", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+        val title = if (selectedBike == null && principalBike != null) 
+            "Salud: ${principalBike.model} (Principal)" 
+        else if (selectedBike != null) 
+            "Salud: ${selectedBike.model}"
+        else 
+            "Estado de Salud Global"
+
+        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
         
         HealthBar(
             label = "Aceite de Motor",
             remainingKm = oilRemaining,
             totalInterval = oilInterval,
-            icon = Icons.Default.OilBarrel
+            icon = Icons.Default.OilBarrel,
+            onReset = { onQuickReset("Aceite", currentKm, principalBike?.id) }
         )
         
         HealthBar(
             label = "Estado de Llantas",
             remainingKm = tiresRemaining,
             totalInterval = tiresInterval,
-            icon = Icons.Default.TireRepair
+            icon = Icons.Default.TireRepair,
+            onReset = { onQuickReset("Llantas", currentKm, principalBike?.id) }
         )
+
+        if (oilRemaining < 0 || tiresRemaining < 0) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFF44336), modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "Revisa los registros. El kilometraje actual parece ser menor al último mantenimiento.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFF44336)
+                )
+            }
+        }
     }
 }
 
 @Composable
-fun HealthBar(label: String, remainingKm: Int, totalInterval: Int, icon: androidx.compose.ui.graphics.vector.ImageVector) {
+fun HealthBar(label: String, remainingKm: Int, totalInterval: Int, icon: androidx.compose.ui.graphics.vector.ImageVector, onReset: () -> Unit) {
     val progress = (remainingKm.toFloat() / totalInterval).coerceIn(0f, 1f)
     val color = when {
-        progress > 0.5f -> Color(0xFF4CAF50) // Verde
-        progress > 0.2f -> Color(0xFFFF9800) // Naranja
-        else -> Color(0xFFF44336) // Rojo
+        progress > 0.5f -> Color(0xFF4CAF50)
+        progress > 0.2f -> Color(0xFFFF9800)
+        else -> Color(0xFFF44336)
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -189,6 +366,9 @@ fun HealthBar(label: String, remainingKm: Int, totalInterval: Int, icon: android
                 color = color,
                 fontWeight = FontWeight.Bold
             )
+            IconButton(onClick = onReset, modifier = Modifier.size(24.dp)) {
+                Icon(Icons.Default.Refresh, contentDescription = "Reiniciar", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+            }
         }
         LinearProgressIndicator(
             progress = progress,
@@ -200,7 +380,7 @@ fun HealthBar(label: String, remainingKm: Int, totalInterval: Int, icon: android
 }
 
 @Composable
-fun MaintenanceCard(log: MaintenanceEntity, onDelete: () -> Unit) {
+fun MaintenanceCard(log: MaintenanceEntity, bikeName: String?, onDelete: () -> Unit) {
     val sdf = remember { SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()) }
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -223,6 +403,11 @@ fun MaintenanceCard(log: MaintenanceEntity, onDelete: () -> Unit) {
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(log.type, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 }
+                
+                if (bikeName != null) {
+                    Text("Moto: $bikeName", style = MaterialTheme.typography.bodySmall, color = Color(0xFF6200EE))
+                }
+
                 Text("${log.mileage} km • ${sdf.format(Date(log.date))}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(log.description, style = MaterialTheme.typography.bodyMedium)
@@ -239,45 +424,81 @@ fun MaintenanceCard(log: MaintenanceEntity, onDelete: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddMaintenanceDialog(onDismiss: () -> Unit, onSave: (String, Int, String, Double) -> Unit) {
+fun AddMaintenanceDialog(
+    bikes: List<com.example.motoday.data.local.entities.BikeEntity>,
+    onDismiss: () -> Unit, 
+    onSave: (String, Int, String, Double, Int?) -> Unit
+) {
     var type by remember { mutableStateOf("Mantenimiento General (ABC)") }
     var mileage by remember { mutableStateOf("") }
     var desc by remember { mutableStateOf("") }
     var cost by remember { mutableStateOf("") }
+    var selectedBikeId by remember { mutableStateOf<Int?>(null) }
 
     val types = listOf("Aceite", "Frenos", "Llantas", "Kit Arrastre", "Mantenimiento General (ABC)")
-    var expanded by remember { mutableStateOf(false) }
+    var expandedType by remember { mutableStateOf(false) }
+    var expandedBikes by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Registrar Mantenimiento") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (bikes.isNotEmpty()) {
+                    Box {
+                        OutlinedTextField(
+                            value = bikes.find { it.id == selectedBikeId }?.model ?: "Moto Principal",
+                            onValueChange = { },
+                            readOnly = true,
+                            label = { Text("Moto") },
+                            modifier = Modifier.fillMaxWidth(),
+                            trailingIcon = {
+                                IconButton(onClick = { expandedBikes = true }) {
+                                    Icon(Icons.Default.ArrowDropDown, null)
+                                }
+                            }
+                        )
+                        DropdownMenu(expanded = expandedBikes, onDismissRequest = { expandedBikes = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Moto Principal (Auto)") },
+                                onClick = { selectedBikeId = null; expandedBikes = false }
+                            )
+                            bikes.forEach { bike ->
+                                DropdownMenuItem(
+                                    text = { Text("${bike.model} (${bike.year})") },
+                                    onClick = { selectedBikeId = bike.id; expandedBikes = false }
+                                )
+                            }
+                        }
+                    }
+                }
+
                 Box {
                     OutlinedTextField(
                         value = type,
                         onValueChange = { },
                         readOnly = true,
-                        label = { Text("Tipo") },
+                        label = { Text("Tipo de Mantenimiento") },
                         modifier = Modifier.fillMaxWidth(),
                         trailingIcon = {
-                            IconButton(onClick = { expanded = true }) {
+                            IconButton(onClick = { expandedType = true }) {
                                 Icon(Icons.Default.ArrowDropDown, null)
                             }
                         }
                     )
-                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    DropdownMenu(expanded = expandedType, onDismissRequest = { expandedType = false }) {
                         types.forEach { t ->
-                            DropdownMenuItem(text = { Text(t) }, onClick = { type = t; expanded = false })
+                            DropdownMenuItem(text = { Text(t) }, onClick = { type = t; expandedType = false })
                         }
                     }
                 }
                 OutlinedTextField(
                     value = mileage,
                     onValueChange = { mileage = it },
-                    label = { Text("Kilometraje actual de la moto") },
+                    label = { Text("Kilometraje en el tablero") },
                     placeholder = { Text("Ej: 12500") },
                     modifier = Modifier.fillMaxWidth(),
+                    supportingText = { Text("Km que marca la moto en este momento") },
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
                     )
@@ -298,7 +519,7 @@ fun AddMaintenanceDialog(onDismiss: () -> Unit, onSave: (String, Int, String, Do
         },
         confirmButton = {
             Button(
-                onClick = { onSave(type, mileage.toIntOrNull() ?: 0, desc, cost.toDoubleOrNull() ?: 0.0) },
+                onClick = { onSave(type, mileage.toIntOrNull() ?: 0, desc, cost.toDoubleOrNull() ?: 0.0, selectedBikeId) },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00FFFF), contentColor = Color(0xFF6200EE))
             ) { Text("Guardar") }
         },

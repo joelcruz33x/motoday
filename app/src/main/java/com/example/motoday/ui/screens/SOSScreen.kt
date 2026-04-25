@@ -28,12 +28,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import com.example.motoday.data.local.AppDatabase
+import com.example.motoday.data.local.entities.ContactEntity
+import com.example.motoday.data.remote.AppwriteManager
+import com.example.motoday.data.remote.AuthManager
+import io.appwrite.models.Document
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
-import com.example.motoday.data.local.AppDatabase
-import com.example.motoday.data.local.entities.ContactEntity
 import com.google.android.gms.location.LocationServices
 import kotlinx.coroutines.launch
 
@@ -46,11 +49,34 @@ fun SOSScreen(navController: NavController) {
     val userProfile by db.userDao().getUserProfile().collectAsState(initial = null)
     val scope = rememberCoroutineScope()
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+    val appwrite = remember { AppwriteManager.getInstance(context) }
+    val authManager = remember { AuthManager(context) }
 
     var emergencySent by remember { mutableStateOf(false) }
     var selectedHelpType by remember { mutableStateOf<String?>(null) }
     var showAddContactDialog by remember { mutableStateOf(false) }
     var currentCoords by remember { mutableStateOf("Esperando permisos...") }
+
+    // Descargar contactos remotos si local está vacío
+    LaunchedEffect(Unit) {
+        val userId = authManager.getCurrentUserId()
+        if (userId != null) {
+            val localContacts = db.contactDao().getAllContactsOnce()
+            if (localContacts.isEmpty()) {
+                val remoteDocs = appwrite.getUserContacts(userId)
+                if (remoteDocs.isNotEmpty()) {
+                    val entities = remoteDocs.map { doc ->
+                        ContactEntity(
+                            name = doc.data["name"] as? String ?: "",
+                            phoneNumber = doc.data["phoneNumber"] as? String ?: "",
+                            relationship = doc.data["relationship"] as? String ?: "Emergencia"
+                        )
+                    }
+                    db.contactDao().insertContacts(entities)
+                }
+            }
+        }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -278,7 +304,15 @@ fun SOSScreen(navController: NavController) {
             onDismiss = { showAddContactDialog = false },
             onSave = { name, phone, relation ->
                 scope.launch {
+                    // Guardar local
                     db.contactDao().insertContact(ContactEntity(name = name, phoneNumber = phone, relationship = relation))
+                    
+                    // Sincronizar remoto
+                    val userId = authManager.getCurrentUserId()
+                    if (userId != null) {
+                        appwrite.syncContact(userId, name, phone, relation)
+                    }
+
                     showAddContactDialog = false
                 }
             }

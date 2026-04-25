@@ -166,6 +166,7 @@ fun RegisterScreen(navController: NavController) {
                                 data = mapOf(
                                     "name" to name,
                                     "level" to selectedLevel,
+                                    "clubName" to "Independiente",
                                     "bikeModel" to "Por definir",
                                     "bikeSpecs" to "Sin datos",
                                     "bikeYear" to "-",
@@ -181,6 +182,7 @@ fun RegisterScreen(navController: NavController) {
                             val newUser = UserEntity(
                                 name = name,
                                 level = selectedLevel,
+                                clubName = "Independiente",
                                 bikeModel = "Por definir",
                                 bikeSpecs = "Sin datos",
                                 bikeYear = "-",

@@ -26,4 +26,7 @@ interface RideDao {
 
     @Delete
     suspend fun deleteRide(ride: RideEntity)
+
+    @Query("DELETE FROM rides WHERE status = 'COMPLETED' AND completedAt IS NOT NULL AND completedAt < :threshold")
+    suspend fun cleanupOldRides(threshold: Long)
 }

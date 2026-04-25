@@ -15,6 +15,10 @@ data class UserEntity(
     val bikeYear: String,
     val bikeColor: String,
     val bikeStatus: String = "Excelente",
+    val clubName: String = "Independiente",
+    val clubRole: String? = null,
+    val groupPhotoUri: String? = null, // Cache para la foto del grupo
+    val isIndependent: Boolean = true,
     val totalKilometers: Int = 0,
     val medalsCount: Int = 0,
     val ridesCompleted: Int = 0,

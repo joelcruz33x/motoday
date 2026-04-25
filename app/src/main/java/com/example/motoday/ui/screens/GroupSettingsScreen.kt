@@ -134,7 +134,7 @@ fun GroupSettingsScreen(navController: NavController, groupId: String) {
                         ) {
                             if (!photoUrl.isNullOrEmpty()) {
                                 AsyncImage(
-                                    model = appwrite.getImageUrl(photoUrl!!),
+                                    model = appwrite.getImageUrl(photoUrl!!, AppwriteManager.BUCKET_GROUPS_ID),
                                     contentDescription = null,
                                     modifier = Modifier.fillMaxSize(),
                                     contentScale = ContentScale.Crop
@@ -275,7 +275,7 @@ fun GroupSettingsScreen(navController: NavController, groupId: String) {
                         ) {
                             if (!memberPhoto.isNullOrEmpty()) {
                                 AsyncImage(
-                                    model = appwrite.getImageUrl(memberPhoto),
+                                    model = appwrite.getImageUrl(memberPhoto, AppwriteManager.BUCKET_PROFILES_ID),
                                     contentDescription = null,
                                     modifier = Modifier.fillMaxSize(),
                                     contentScale = ContentScale.Crop

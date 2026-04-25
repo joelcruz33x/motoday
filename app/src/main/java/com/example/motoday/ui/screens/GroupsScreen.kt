@@ -1,5 +1,6 @@
 package com.example.motoday.ui.screens
 
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -84,6 +85,7 @@ fun GroupsScreen(navController: NavController) {
     var isExploring by remember { mutableStateOf(true) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var showMembersDialog by remember { mutableStateOf(false) }
+    var showRequestsDialog by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     
     val selectedGroup = allGroups.find { it.id == selectedGroupId }
@@ -282,6 +284,24 @@ fun GroupsScreen(navController: NavController) {
         )
     }
 
+    if (showRequestsDialog && selectedGroup != null) {
+        val requests = (selectedGroup.data["requests"] as? List<*>)?.map { it.toString() } ?: emptyList()
+        GroupRequestsDialog(
+            groupId = selectedGroupId!!,
+            requestUserIds = requests,
+            appwrite = appwrite,
+            onDismiss = { showRequestsDialog = false },
+            onAction = {
+                scope.launch {
+                    val remoteGroups = appwrite.getGroups()
+                    allGroups.clear()
+                    allGroups.addAll(remoteGroups)
+                    showRequestsDialog = false
+                }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -308,6 +328,14 @@ fun GroupsScreen(navController: NavController) {
                         ) {
                             val isAdmin = selectedGroup?.data?.get("adminId") == currentUserId
                             if (isAdmin) {
+                                DropdownMenuItem(
+                                    text = { Text("Solicitudes de Ingreso") },
+                                    onClick = {
+                                        showMenu = false
+                                        showRequestsDialog = true
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.GroupAdd, contentDescription = null) }
+                                )
                                 DropdownMenuItem(
                                     text = { Text("Ajustes del Grupo") },
                                     onClick = {
@@ -383,7 +411,7 @@ fun GroupsScreen(navController: NavController) {
                     members?.contains(currentUserId) == true
                 }.forEach { doc ->
                     val rawPhotoUrl = doc.data["photoUrl"] as? String
-                    val finalPhotoUrl = if (!rawPhotoUrl.isNullOrEmpty()) appwrite.getImageUrl(rawPhotoUrl) else null
+                    val finalPhotoUrl = if (!rawPhotoUrl.isNullOrEmpty()) appwrite.getImageUrl(rawPhotoUrl, AppwriteManager.BUCKET_GROUPS_ID) else null
                     
                     GroupIconCircle(
                         name = doc.data["name"] as? String ?: "Grupo",
@@ -422,16 +450,15 @@ fun GroupsScreen(navController: NavController) {
                         onQueryChange = { searchQuery = it },
                         allGroups = allGroups,
                         currentUserId = currentUserId ?: "",
-                        appwrite = appwrite, // Agregamos el parámetro faltante
+                        appwrite = appwrite, 
                         onJoin = { groupId, members ->
                             scope.launch {
-                                val success = appwrite.joinGroup(groupId, currentUserId ?: "", members)
+                                val success = appwrite.requestJoinGroup(groupId, currentUserId ?: "")
                                 if (success) {
+                                    Toast.makeText(context, "Solicitud enviada al club", Toast.LENGTH_SHORT).show()
                                     val remoteGroups = appwrite.getGroups()
                                     allGroups.clear()
                                     allGroups.addAll(remoteGroups)
-                                    selectedGroupId = groupId
-                                    isExploring = false
                                 }
                             }
                         }
@@ -529,7 +556,7 @@ fun ExploreGroupsContent(
             items(filteredGroups) { doc ->
                 val name = doc.data["name"] as? String ?: "Grupo"
                 val photoId = doc.data["photoUrl"] as? String
-                val photoUrl = if (!photoId.isNullOrEmpty()) appwrite.getImageUrl(photoId) else null
+                val photoUrl = if (!photoId.isNullOrEmpty()) appwrite.getImageUrl(photoId, AppwriteManager.BUCKET_GROUPS_ID) else null
                 val members = (doc.data["members"] as? List<*>)?.filterIsInstance<String>() ?: emptyList()
                 val isMember = members.contains(currentUserId)
 
@@ -565,13 +592,18 @@ fun ExploreGroupsContent(
                             Text("${members.size} miembros", style = MaterialTheme.typography.labelSmall)
                         }
                         if (!isMember) {
-                            Button(
-                                onClick = { onJoin(doc.id, members) },
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                            ) {
-                                Text("Unirse", fontSize = 12.sp)
-                            }
-                        } else {
+                    val requests = (doc.data["requests"] as? List<*>)?.map { it.toString() } ?: emptyList()
+                    val hasRequested = requests.contains(currentUserId)
+
+                    Button(
+                        onClick = { if (!hasRequested) onJoin(doc.id, members) },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        enabled = !hasRequested,
+                        colors = if (hasRequested) ButtonDefaults.buttonColors(containerColor = Color.Gray) else ButtonDefaults.buttonColors()
+                    ) {
+                        Text(if (hasRequested) "Pendiente" else "Unirse", fontSize = 12.sp)
+                    }
+                } else {
                             Text("Miembro", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                         }
                     }
@@ -852,7 +884,7 @@ fun GroupMembersDialog(
                                 ) {
                                     if (!photoUrl.isNullOrEmpty()) {
                                         AsyncImage(
-                                            model = appwrite.getImageUrl(photoUrl),
+                                            model = appwrite.getImageUrl(photoUrl, AppwriteManager.BUCKET_PROFILES_ID),
                                             contentDescription = null,
                                             modifier = Modifier.fillMaxSize(),
                                             contentScale = ContentScale.Crop
@@ -930,6 +962,81 @@ fun GroupMembersDialog(
     )
 }
 
+
+@Composable
+fun GroupRequestsDialog(
+    groupId: String,
+    requestUserIds: List<String>,
+    appwrite: AppwriteManager,
+    onDismiss: () -> Unit,
+    onAction: () -> Unit
+) {
+    var profiles by remember { mutableStateOf<List<Document<Map<String, Any>>>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(requestUserIds) {
+        profiles = appwrite.getUsersProfiles(requestUserIds)
+        isLoading = false
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Solicitudes de Ingreso") },
+        text = {
+            Box(modifier = Modifier.heightIn(max = 400.dp)) {
+                if (isLoading) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                } else if (profiles.isEmpty()) {
+                    Text("No hay solicitudes pendientes", modifier = Modifier.padding(16.dp))
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(profiles) { profile ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                AsyncImage(
+                                    model = appwrite.getImageUrl(profile.data["profilePic"] as? String ?: "", AppwriteManager.BUCKET_PROFILES_ID),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(40.dp).clip(CircleShape),
+                                    contentScale = ContentScale.Crop,
+                                    error = remember { androidx.compose.ui.graphics.painter.ColorPainter(Color.LightGray) }
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(profile.data["name"] as? String ?: "Motero", fontWeight = FontWeight.Bold)
+                                    Text(profile.data["level"] as? String ?: "Novato", style = MaterialTheme.typography.labelSmall)
+                                }
+                                IconButton(onClick = {
+                                    scope.launch {
+                                        if (appwrite.approveJoinRequest(groupId, profile.id)) {
+                                            onAction()
+                                        }
+                                    }
+                                }) {
+                                    Icon(Icons.Default.Check, contentDescription = "Aprobar", tint = Color(0xFF4CAF50))
+                                }
+                                IconButton(onClick = {
+                                    scope.launch {
+                                        if (appwrite.rejectJoinRequest(groupId, profile.id)) {
+                                            onAction()
+                                        }
+                                    }
+                                }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Rechazar", tint = Color.Red)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Cerrar") }
+        }
+    )
+}
 
 @Composable
 fun GroupIconCircle(name: String, photoUrl: String?, isSelected: Boolean, onClick: () -> Unit) {

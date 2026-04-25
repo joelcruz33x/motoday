@@ -11,8 +11,14 @@ interface MaintenanceDao {
     @Query("SELECT * FROM maintenance_logs ORDER BY date DESC")
     fun getAllLogs(): Flow<List<MaintenanceEntity>>
 
+    @Query("SELECT * FROM maintenance_logs")
+    suspend fun getAllLogsOnce(): List<MaintenanceEntity>
+
     @Insert
     suspend fun insertLog(log: MaintenanceEntity)
+
+    @Insert
+    suspend fun insertLogs(logs: List<MaintenanceEntity>)
 
     @Query("DELETE FROM maintenance_logs WHERE id = :id")
     suspend fun deleteLog(id: Int)

@@ -23,5 +23,6 @@ data class RideEntity(
     val participantsCount: Int = 0,
     val isSynced: Boolean = false,
     val difficulty: String = "Fácil", // Fácil, Intermedio, Difícil
-    val terrainType: String = "Asfalto" // Asfalto, Mixto, Off-road
+    val terrainType: String = "Asfalto", // Asfalto, Mixto, Off-road
+    val completedAt: Long? = null // Timestamp de cuando se finalizó la ruta
 )

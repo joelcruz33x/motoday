@@ -12,6 +12,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -61,7 +64,6 @@ fun ProfileScreen(navController: NavController) {
     val appwrite = remember { AppwriteManager.getInstance(context) }
     val authManager = remember { AuthManager(context) }
 
-    var userRoleInfo by remember { mutableStateOf<Pair<String, String>?>(null) }
     var isEditing by remember { mutableStateOf(false) }
     var isLoadingInitial by remember { mutableStateOf(true) }
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -79,20 +81,40 @@ fun ProfileScreen(navController: NavController) {
                     val bikePicId = data["bikePic"] as? String
                     val localUser = db.userDao().getUserProfileOnce()
 
+                    // Solo actualizar la URL si recibimos un ID válido de Appwrite, 
+                    // de lo contrario conservar la que ya tenemos localmente.
+                    val updatedProfilePic = when {
+                        !profilePicId.isNullOrBlank() && profilePicId != "null" -> {
+                            if (profilePicId.startsWith("http")) profilePicId 
+                            else appwrite.getImageUrl(profilePicId, AppwriteManager.BUCKET_PROFILES_ID)
+                        }
+                        else -> localUser?.profilePictureUri?.takeIf { it.isNotBlank() && it != "null" }
+                    }
+
+                    val updatedBikePic = when {
+                        !bikePicId.isNullOrBlank() && bikePicId != "null" -> {
+                            if (bikePicId.startsWith("http")) bikePicId 
+                            else appwrite.getImageUrl(bikePicId, AppwriteManager.BUCKET_BIKES_ID)
+                        }
+                        else -> localUser?.bikePictureUri?.takeIf { it.isNotBlank() && it != "null" }
+                    }
+
                     val newUser = (localUser ?: UserEntity(id = 1, name = "Motero", level = "Novato", bikeModel = "Sin moto", bikeSpecs = "", bikeYear = "", bikeColor = "")).copy(
                         name = data["name"] as? String ?: (localUser?.name ?: "Motero"),
                         level = data["level"] as? String ?: (localUser?.level ?: "Novato"),
+                        clubName = data["clubName"] as? String ?: (localUser?.clubName ?: "Independiente"),
+                        clubRole = data["clubRole"] as? String ?: (localUser?.clubRole),
                         bikeModel = data["bikeModel"] as? String ?: (localUser?.bikeModel ?: "Sin moto"),
                         bikeSpecs = data["bikeSpecs"] as? String ?: (localUser?.bikeSpecs ?: ""),
                         bikeYear = data["bikeYear"] as? String ?: (localUser?.bikeYear ?: ""),
                         bikeColor = data["bikeColor"] as? String ?: (localUser?.bikeColor ?: ""),
-                        profilePictureUri = when {
-                            !profilePicId.isNullOrBlank() && profilePicId != "null" -> if (profilePicId.startsWith("http")) profilePicId else appwrite.getImageUrl(profilePicId, AppwriteManager.BUCKET_PROFILES_ID)
-                            else -> localUser?.profilePictureUri
-                        },
-                        bikePictureUri = when {
-                            !bikePicId.isNullOrBlank() && bikePicId != "null" -> if (bikePicId.startsWith("http")) bikePicId else appwrite.getImageUrl(bikePicId, AppwriteManager.BUCKET_BIKES_ID)
-                            else -> localUser?.bikePictureUri
+                        profilePictureUri = updatedProfilePic,
+                        bikePictureUri = updatedBikePic,
+                        isIndependent = when(val ind = data["isIndependent"]) {
+                            is Boolean -> ind
+                            is Number -> ind.toInt() == 1
+                            is String -> ind.lowercase() == "true"
+                            else -> localUser?.isIndependent ?: true
                         },
                         totalKilometers = (data["totalKm"] as? Number)?.toInt() ?: (localUser?.totalKilometers ?: 0),
                         ridesCompleted = (data["rides"] as? Number)?.toInt() ?: (localUser?.ridesCompleted ?: 0)
@@ -108,20 +130,39 @@ fun ProfileScreen(navController: NavController) {
                 }
             }
 
-            // 1. Sincronizar Roles
+            // 1. Sincronizar Roles de forma que no parpadee (Persistir en BD local)
             try {
                 val allGroups = appwrite.getGroups()
                 val gson = com.google.gson.Gson()
                 val type = object : com.google.gson.reflect.TypeToken<Map<String, String>>() {}.type
-                val groupWithRole = allGroups.find { doc ->
+                var foundRole: String? = null
+                var foundGroupName: String = "Independiente"
+                
+                for (doc in allGroups) {
                     val rolesMap: Map<String, String> = gson.fromJson(doc.data["roles"] as? String ?: "{}", type) ?: emptyMap()
-                    rolesMap.containsKey(userId)
-                }
-                if (groupWithRole != null) {
-                    val rolesMap: Map<String, String> = gson.fromJson(groupWithRole.data["roles"] as? String ?: "{}", type) ?: emptyMap()
-                    val role = rolesMap[userId]
-                    val groupName = groupWithRole.data["name"] as? String ?: "Grupo"
-                    if (role != null) userRoleInfo = role to groupName
+                    if (rolesMap.containsKey(userId)) {
+                        foundRole = rolesMap[userId]
+                        foundGroupName = doc.data["name"] as? String ?: "Grupo"
+                        val groupPhoto = doc.data["photoUrl"] as? String
+                        val fullGroupPhotoUrl = if (!groupPhoto.isNullOrBlank()) {
+                            appwrite.getImageUrl(groupPhoto, AppwriteManager.BUCKET_GROUPS_ID)
+                        } else null
+
+                        // Actualizar la base de datos local con toda la info del grupo
+                        val currentLocal = db.userDao().getUserProfileOnce()
+                        if (currentLocal != null) {
+                            if (currentLocal.clubRole != foundRole || 
+                                currentLocal.clubName != foundGroupName || 
+                                currentLocal.groupPhotoUri != fullGroupPhotoUrl) {
+                                db.userDao().insertOrUpdate(currentLocal.copy(
+                                    clubRole = foundRole,
+                                    clubName = foundGroupName,
+                                    groupPhotoUri = fullGroupPhotoUrl
+                                ))
+                            }
+                        }
+                        break
+                    }
                 }
             } catch (e: Exception) { Log.e("ProfileScreen", "Error roles: ${e.message}") }
 
@@ -141,6 +182,62 @@ fun ProfileScreen(navController: NavController) {
                     db.passportDao().insertStamps(localStamps)
                 }
             } catch (e: Exception) { Log.e("ProfileScreen", "Error sellos: ${e.message}") }
+
+            // 3. Sincronizar Garaje (Motos)
+            try {
+                val remoteBikes = appwrite.getUserBikes(userId)
+                if (remoteBikes.isNotEmpty()) {
+                    val currentLocalBikes = db.bikeDao().getAllBikesOnce()
+                    remoteBikes.forEach { doc ->
+                        val remoteId = doc.id
+                        val existingLocal = currentLocalBikes.find { it.remoteId == remoteId }
+                        val bike = com.example.motoday.data.local.entities.BikeEntity(
+                            id = existingLocal?.id ?: 0,
+                            remoteId = remoteId,
+                            model = doc.data["model"] as? String ?: "Desconocida",
+                            year = doc.data["year"] as? String ?: "",
+                            color = doc.data["color"] as? String ?: "",
+                            specs = doc.data["specs"] as? String ?: "",
+                            status = doc.data["status"] as? String ?: "Excelente",
+                            currentKm = (doc.data["currentKm"] as? Number)?.toInt() ?: 0,
+                            bikePictureUri = appwrite.getImageUrl(doc.data["bikePic"] as? String ?: "", AppwriteManager.BUCKET_BIKES_ID).ifBlank { existingLocal?.bikePictureUri }
+                        )
+                        db.bikeDao().insertOrUpdate(bike)
+                        
+                        // Sincronizar fotos secundarias de esta moto
+                        val localBikeId = if (bike.id == 0) {
+                            // Si era nueva, necesitamos el ID generado por Room. 
+                            // Como insertOrUpdate no devuelve el ID, lo buscamos por remoteId.
+                            db.bikeDao().getAllBikesOnce().find { it.remoteId == remoteId }?.id ?: 0
+                        } else bike.id
+                        
+                        if (localBikeId != 0) {
+                            try {
+                                val remotePhotos = appwrite.getBikePhotos(remoteId)
+                                val localPhotos = db.bikePhotoDao().getPhotosForBikeOnce(localBikeId)
+                                
+                                remotePhotos.forEach { photoDoc ->
+                                    val photoFileId = photoDoc.data["fileId"] as? String
+                                    if (!photoFileId.isNullOrBlank()) {
+                                        val photoUrl = appwrite.getImageUrl(photoFileId, AppwriteManager.BUCKET_BIKES_ID)
+                                        if (localPhotos.none { it.remoteId == photoFileId }) {
+                                            db.bikePhotoDao().insertPhoto(
+                                                com.example.motoday.data.local.entities.BikePhotoEntity(
+                                                    bikeId = localBikeId,
+                                                    remoteId = photoFileId,
+                                                    uri = photoUrl
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e("ProfileScreen", "Error sincronizando fotos de moto $remoteId: ${e.message}")
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) { Log.e("ProfileScreen", "Error garaje: ${e.message}") }
         } else {
             if (db.userDao().getUserProfileOnce() == null) {
                 db.userDao().insertOrUpdate(UserEntity(id = 1, name = "Invitado", level = "Novato", bikeModel = "Sin moto", bikeSpecs = "", bikeYear = "", bikeColor = ""))
@@ -182,6 +279,8 @@ fun ProfileScreen(navController: NavController) {
                             try {
                                 val userId = authManager.getCurrentUserId()
                                 if (userId != null) {
+                                    val bikePicId = appwrite.extractFileIdFromUrl(userToSave.bikePictureUri)
+                                    val profilePicId = appwrite.extractFileIdFromUrl(userToSave.profilePictureUri)
                                     appwrite.updateUserProfile(
                                         userId = userId,
                                         name = userToSave.name,
@@ -189,7 +288,10 @@ fun ProfileScreen(navController: NavController) {
                                         bikeModel = userToSave.bikeModel,
                                         bikeSpecs = userToSave.bikeSpecs,
                                         bikeYear = userToSave.bikeYear,
-                                        bikeColor = userToSave.bikeColor
+                                        bikeColor = userToSave.bikeColor,
+                                        isIndependent = userToSave.isIndependent,
+                                        profilePic = profilePicId,
+                                        bikePic = bikePicId
                                     )
                                 }
                             } catch (e: Exception) {
@@ -199,7 +301,13 @@ fun ProfileScreen(navController: NavController) {
                         }
                     }
                 } else {
-                    ProfileHeader(user, userRoleInfo, onImageSelected = { uriString ->
+                    val currentRoleInfo = remember(user.clubRole, user.clubName, user.groupPhotoUri) {
+                        if (!user.clubRole.isNullOrBlank() && user.clubRole != "null" && user.clubName != "Independiente") {
+                            Triple(user.clubRole, user.clubName, user.groupPhotoUri)
+                        } else null
+                    }
+
+                    ProfileHeader(user, currentRoleInfo, onImageSelected = { uriString ->
                         scope.launch {
                             try {
                                 val uri = uriString.toUri()
@@ -235,6 +343,7 @@ fun ProfileScreen(navController: NavController) {
                                     
                                     val userId = authManager.getCurrentUserId()
                                     if (userId != null) {
+                                        val bikePicId = appwrite.extractFileIdFromUrl(user.bikePictureUri)
                                         appwrite.updateUserProfile(
                                             userId = userId,
                                             name = user.name,
@@ -243,7 +352,9 @@ fun ProfileScreen(navController: NavController) {
                                             bikeSpecs = user.bikeSpecs,
                                             bikeYear = user.bikeYear,
                                             bikeColor = user.bikeColor,
-                                            profilePic = fileId
+                                            isIndependent = user.isIndependent,
+                                            profilePic = fileId,
+                                            bikePic = bikePicId
                                         )
                                     }
                                     
@@ -315,6 +426,7 @@ fun ProfileScreen(navController: NavController) {
                                         // Primero obtenemos el perfil actual de la nube para no sobreescribir con datos viejos
                                         val currentProfile = appwrite.getUserProfile(userId)
                                         val profileData = currentProfile?.data ?: emptyMap()
+                                        val profilePicId = (profileData["profilePic"] as? String) ?: appwrite.extractFileIdFromUrl(user.profilePictureUri)
 
                                         val success = appwrite.updateUserProfile(
                                             userId = userId,
@@ -324,6 +436,8 @@ fun ProfileScreen(navController: NavController) {
                                             bikeSpecs = (profileData["bikeSpecs"] as? String) ?: user.bikeSpecs,
                                             bikeYear = (profileData["bikeYear"] as? String) ?: user.bikeYear,
                                             bikeColor = (profileData["bikeColor"] as? String) ?: user.bikeColor,
+                                            isIndependent = user.isIndependent,
+                                            profilePic = profilePicId,
                                             bikePic = fileId
                                         )
                                         
@@ -365,6 +479,7 @@ fun EditProfileForm(user: UserEntity, onSave: (UserEntity) -> Unit) {
     var bikeYear by remember { mutableStateOf(user.bikeYear) }
     var bikeColor by remember { mutableStateOf(user.bikeColor) }
     var bikeStatus by remember { mutableStateOf(user.bikeStatus) }
+    var isIndependent by remember { mutableStateOf(user.isIndependent) }
 
     LazyColumn(
         modifier = Modifier.padding(16.dp).fillMaxSize(),
@@ -380,6 +495,23 @@ fun EditProfileForm(user: UserEntity, onSave: (UserEntity) -> Unit) {
         item { OutlinedTextField(value = bikeYear, onValueChange = { bikeYear = it }, label = { Text("Año") }, modifier = Modifier.fillMaxWidth()) }
         item { OutlinedTextField(value = bikeColor, onValueChange = { bikeColor = it }, label = { Text("Color") }, modifier = Modifier.fillMaxWidth()) }
         item { OutlinedTextField(value = bikeStatus, onValueChange = { bikeStatus = it }, label = { Text("Estado de la Moto") }, modifier = Modifier.fillMaxWidth()) }
+
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text("Independiente", style = MaterialTheme.typography.bodyLarge)
+                    Text("Mostrar insignia de independiente", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                }
+                Switch(
+                    checked = isIndependent,
+                    onCheckedChange = { isIndependent = it }
+                )
+            }
+        }
         
         item {
             Button(
@@ -390,7 +522,8 @@ fun EditProfileForm(user: UserEntity, onSave: (UserEntity) -> Unit) {
                         bikeSpecs = bikeSpecs,
                         bikeYear = bikeYear,
                         bikeColor = bikeColor,
-                        bikeStatus = bikeStatus
+                        bikeStatus = bikeStatus,
+                        isIndependent = isIndependent
                     ))
                 },
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp)
@@ -402,7 +535,11 @@ fun EditProfileForm(user: UserEntity, onSave: (UserEntity) -> Unit) {
 }
 
 @Composable
-fun ProfileHeader(user: UserEntity, roleInfo: Pair<String, String>?, onImageSelected: (String) -> Unit) {
+fun ProfileHeader(
+    user: UserEntity,
+    roleInfo: Triple<String, String, String?>?,
+    onImageSelected: (String) -> Unit
+) {
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
         onResult = { uri ->
@@ -426,18 +563,18 @@ fun ProfileHeader(user: UserEntity, roleInfo: Pair<String, String>?, onImageSele
             ) {
                 val profileUri = user.profilePictureUri
                 Log.d("ProfileScreen", "ProfileHeader loading URI: $profileUri")
-                        if (!profileUri.isNullOrBlank() && profileUri != "null") {
-                            AsyncImage(
-                                model = profileUri,
-                                contentDescription = "Foto de perfil",
-                                modifier = Modifier.fillMaxSize().clip(CircleShape),
-                                contentScale = ContentScale.Crop,
-                                onError = { state ->
-                                    Log.e("ProfileScreen", "Error cargando perfil: ${state.result.throwable.message}")
-                                },
-                                error = remember { androidx.compose.ui.graphics.painter.ColorPainter(Color.LightGray) }
-                            )
-                        } else {
+                if (!profileUri.isNullOrBlank() && profileUri != "null") {
+                    AsyncImage(
+                        model = profileUri,
+                        contentDescription = "Foto de perfil",
+                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                        contentScale = ContentScale.Crop,
+                        onError = { state ->
+                            Log.e("ProfileScreen", "Error cargando perfil: ${state.result.throwable.message}")
+                        },
+                        error = remember { androidx.compose.ui.graphics.painter.ColorPainter(Color.LightGray) }
+                    )
+                } else {
                     Icon(
                         Icons.Default.Person,
                         contentDescription = null,
@@ -463,12 +600,18 @@ fun ProfileHeader(user: UserEntity, roleInfo: Pair<String, String>?, onImageSele
             Spacer(modifier = Modifier.width(16.dp))
             Column {
                 Text(text = user.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text(text = "Nivel: ${user.level}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = "Nivel: ${user.level}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
+                    if (roleInfo == null && !user.isIndependent && user.clubName.isNotBlank() && user.clubName != "Independiente") {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(text = "• ${user.clubName}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    }
+                }
             }
         }
 
         if (roleInfo != null) {
-            val (role, groupName) = roleInfo
+            val (role, groupName, groupPhoto) = roleInfo
             val rankStyle = when (role) {
                 "Presidente" -> Triple(Color(0xFFFFD700), Icons.Default.MilitaryTech, "Líder de Club")
                 "Vicepresidente" -> Triple(Color(0xFFC0C0C0), Icons.Default.Star, "Mando Directivo")
@@ -480,13 +623,13 @@ fun ProfileHeader(user: UserEntity, roleInfo: Pair<String, String>?, onImageSele
                 else -> Triple(MaterialTheme.colorScheme.primary, Icons.Default.Shield, "Miembro")
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             
             Surface(
                 color = rankStyle.first.copy(alpha = 0.15f),
                 shape = RoundedCornerShape(12.dp),
                 border = androidx.compose.foundation.BorderStroke(2.dp, rankStyle.first),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.padding(top = 4.dp)
             ) {
                 Row(
                     modifier = Modifier.padding(12.dp),
@@ -495,15 +638,25 @@ fun ProfileHeader(user: UserEntity, roleInfo: Pair<String, String>?, onImageSele
                     Box(
                         modifier = Modifier
                             .size(40.dp)
-                            .background(rankStyle.first, CircleShape),
+                            .clip(CircleShape)
+                            .background(if (groupPhoto == null) rankStyle.first else Color.Transparent),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            rankStyle.second,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(24.dp)
-                        )
+                        if (groupPhoto != null) {
+                            AsyncImage(
+                                model = groupPhoto,
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Icon(
+                                rankStyle.second,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
                     }
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
@@ -515,17 +668,59 @@ fun ProfileHeader(user: UserEntity, roleInfo: Pair<String, String>?, onImageSele
                                 fontWeight = FontWeight.ExtraBold,
                                 letterSpacing = 1.sp
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "• ${rankStyle.third}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.Gray
-                            )
+                            if (rankStyle.third != "Miembro") {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "• ${rankStyle.third}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.Gray
+                                )
+                            }
                         }
                         Text(
                             text = groupName,
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
+        if (user.isIndependent) {
+            // Estilo para el Motero Independiente (Aparece siempre que el toggle esté activo)
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color.Gray.copy(alpha = 0.3f)),
+                modifier = Modifier.padding(top = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(Color.DarkGray, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.PersonOutline,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "MOTERO INDEPENDIENTE",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 1.sp
                         )
                     }
                 }
@@ -534,81 +729,608 @@ fun ProfileHeader(user: UserEntity, roleInfo: Pair<String, String>?, onImageSele
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MyBikeSection(user: UserEntity, navController: NavController, onImageSelected: (String) -> Unit) {
-    val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia(),
-        onResult = { uri ->
-            uri?.let { onImageSelected(it.toString()) }
-        }
-    )
+    val context = LocalContext.current
+    val db = AppDatabase.getDatabase(context)
+    val garageBikesWithPhotos by db.bikeDao().getAllBikesWithPhotos().collectAsState(initial = emptyList())
+    val scope = rememberCoroutineScope()
+    val appwrite = remember { AppwriteManager.getInstance(context) }
+    val authManager = remember { AuthManager(context) }
+    
+    var showAddBikeDialog by remember { mutableStateOf(false) }
+    var bikeToEdit by remember { mutableStateOf<com.example.motoday.data.local.entities.BikeEntity?>(null) }
+    var selectedBikeIndex by remember { mutableIntStateOf(0) }
 
-    LazyColumn(modifier = Modifier.padding(16.dp).fillMaxSize()) {
+    LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         item {
-            Card(
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                shape = RoundedCornerShape(16.dp)
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(180.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color.DarkGray)
-                            .clickable {
-                                launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        val bikeUri = user.bikePictureUri
-                        Log.d("ProfileScreen", "MyBikeSection loading URI: $bikeUri")
-                        if (!bikeUri.isNullOrBlank() && bikeUri != "null") {
-                            AsyncImage(
-                                model = bikeUri,
-                                contentDescription = "Foto de tu moto",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop,
-                                onError = { state ->
-                                    Log.e("ProfileScreen", "Error cargando foto moto: ${state.result.throwable.message}")
+                Text(text = "Mi Garaje", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                IconButton(onClick = { showAddBikeDialog = true }) {
+                    Icon(Icons.Default.Add, contentDescription = "Añadir moto")
+                }
+            }
+            
+            // Switcher de Motos (Pills)
+            androidx.compose.foundation.lazy.LazyRow(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (garageBikesWithPhotos.isEmpty()) {
+                    item {
+                        val isSelected = selectedBikeIndex == 0
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { selectedBikeIndex = 0 },
+                            label = { Text(user.bikeModel.ifBlank { "Mi Moto" }) },
+                            leadingIcon = if (isSelected) { { Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp)) } } else null
+                        )
+                    }
+                } else {
+                    items(garageBikesWithPhotos.size) { index ->
+                        val isSelected = selectedBikeIndex == index
+                        val bike = garageBikesWithPhotos[index].bike
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { selectedBikeIndex = index },
+                            label = { Text(bike.model) },
+                            leadingIcon = if (isSelected) { { Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp)) } } else null
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        // Mostrar la moto seleccionada
+        item {
+            if (garageBikesWithPhotos.isEmpty()) {
+                val mainBikeImages = remember(user.bikePictureUri) {
+                    listOfNotNull(user.bikePictureUri).filter { it.isNotBlank() }
+                }
+                BikeCard(
+                    model = user.bikeModel,
+                    specs = user.bikeSpecs,
+                    year = user.bikeYear,
+                    color = user.bikeColor,
+                    status = user.bikeStatus,
+                    images = mainBikeImages,
+                    onClick = { 
+                        bikeToEdit = com.example.motoday.data.local.entities.BikeEntity(
+                            id = 0,
+                            model = user.bikeModel,
+                            specs = user.bikeSpecs,
+                            year = user.bikeYear,
+                            color = user.bikeColor,
+                            status = user.bikeStatus,
+                            bikePictureUri = user.bikePictureUri
+                        )
+                    },
+                    onImageClick = { onImageSelected(it) }
+                )
+            } else if (selectedBikeIndex < garageBikesWithPhotos.size) {
+                val bikeWithPhotos = garageBikesWithPhotos[selectedBikeIndex]
+                val bike = bikeWithPhotos.bike
+                
+                // Consolidar fotos: Foto principal + Fotos de la galería
+                val photos = remember(bikeWithPhotos) {
+                    val list = mutableListOf<String>()
+                    if (!bike.bikePictureUri.isNullOrBlank()) list.add(bike.bikePictureUri!!)
+                    list.addAll(bikeWithPhotos.photos.map { it.uri }.filter { it.isNotBlank() })
+                    list.distinct().filter { it.isNotBlank() && it != "null" }
+                }
+                
+                key(bike.id) {
+                    Column {
+                        BikeCard(
+                            model = bike.model,
+                            specs = bike.specs,
+                            year = bike.year,
+                            color = bike.color,
+                            status = bike.status,
+                            images = photos,
+                            onClick = { bikeToEdit = bike },
+                            onImageClick = { uriString ->
+                                scope.launch {
+                                    try {
+                                        val uri = uriString.toUri()
+                                        
+                                        // Persistir permiso para la galería
+                                        try {
+                                            if (uri.scheme == "content") {
+                                                context.contentResolver.takePersistableUriPermission(
+                                                    uri,
+                                                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                                )
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.d("ProfileScreen", "No se pudo persistir permiso galeria: ${e.message}")
+                                        }
+
+                                        val inputStream = context.contentResolver.openInputStream(uri)
+                                        val bytes = inputStream?.readBytes() ?: return@launch
+                                        inputStream.close()
+
+                                        val fileName = "bike_${bike.id}_${System.currentTimeMillis()}.jpg"
+                                        val fileId = appwrite.uploadImage(
+                                            io.appwrite.models.InputFile.fromBytes(bytes = bytes, filename = fileName, mimeType = "image/jpeg"),
+                                            AppwriteManager.BUCKET_BIKES_ID
+                                        )
+                                        val remoteUrl = appwrite.getImageUrl(fileId, AppwriteManager.BUCKET_BIKES_ID)
+                                        
+                                        // Si la moto no tiene foto principal, asignarle esta
+                                        if (bike.bikePictureUri.isNullOrBlank() || bike.bikePictureUri == "null") {
+                                            val updatedBike = bike.copy(bikePictureUri = remoteUrl)
+                                            db.bikeDao().insertOrUpdate(updatedBike)
+                                            bike.remoteId?.let { rid ->
+                                                appwrite.updateRemoteBike(
+                                                    bikeId = rid,
+                                                    model = bike.model,
+                                                    year = bike.year,
+                                                    color = bike.color,
+                                                    specs = bike.specs,
+                                                    status = bike.status,
+                                                    currentKm = bike.currentKm,
+                                                    picId = fileId
+                                                )
+                                            }
+                                        }
+
+                                        // Sincronizar relación en Appwrite para la galería
+                                        bike.remoteId?.let { remoteId ->
+                                            appwrite.syncBikePhoto(remoteId, fileId)
+                                        }
+
+                                        db.bikePhotoDao().insertPhoto(
+                                            com.example.motoday.data.local.entities.BikePhotoEntity(
+                                                bikeId = bike.id, remoteId = fileId, uri = remoteUrl
+                                            )
+                                        )
+                                        Toast.makeText(context, "Foto añadida!", Toast.LENGTH_SHORT).show()
+                                    } catch (e: Exception) {
+                                        Log.e("ProfileScreen", "Error subiendo foto: ${e.message}")
+                                    }
+                                }
+                            }
+                        )
+
+                        // Botón para establecer como principal si no lo es
+                        val isPrincipal = bike.model == user.bikeModel && bike.specs == user.bikeSpecs && bike.year == user.bikeYear
+                        if (!isPrincipal) {
+                            TextButton(
+                                onClick = {
+                                    scope.launch {
+                                        val latestUser = db.userDao().getUserProfileOnce()
+                                        if (latestUser != null) {
+                                            val finalBikePic = bike.bikePictureUri?.takeIf { it.isNotBlank() && it != "null" } 
+                                                ?: photos.firstOrNull()
+
+                                            val userToSave = latestUser.copy(
+                                                bikeModel = bike.model,
+                                                bikeSpecs = bike.specs,
+                                                bikeYear = bike.year,
+                                                bikeColor = bike.color,
+                                                bikeStatus = bike.status,
+                                                bikePictureUri = finalBikePic
+                                            )
+                                            db.userDao().insertOrUpdate(userToSave)
+                                            
+                                            val userId = authManager.getCurrentUserId()
+                                            if (userId != null) {
+                                                val bikePicId = appwrite.extractFileIdFromUrl(finalBikePic)
+                                                appwrite.updateUserProfile(
+                                                    userId = userId,
+                                                    name = userToSave.name,
+                                                    level = userToSave.level,
+                                                    bikeModel = userToSave.bikeModel,
+                                                    bikeSpecs = userToSave.bikeSpecs,
+                                                    bikeYear = userToSave.bikeYear,
+                                                    bikeColor = userToSave.bikeColor,
+                                                    totalKm = userToSave.totalKilometers,
+                                                    rides = userToSave.ridesCompleted,
+                                                    isIndependent = userToSave.isIndependent,
+                                                    bikePic = bikePicId
+                                                )
+                                            }
+                                            Toast.makeText(context, "Moto principal actualizada", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
                                 },
-                                error = remember { androidx.compose.ui.graphics.painter.ColorPainter(Color.DarkGray) }
-                            )
+                                modifier = Modifier.align(Alignment.End)
+                            ) {
+                                Icon(Icons.Default.Star, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Usar como principal")
+                            }
                         } else {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(48.dp), tint = Color.LightGray)
-                                Text("Añadir foto de tu moto", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                            Row(
+                                modifier = Modifier.align(Alignment.End).padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Stars, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Moto principal", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
                             }
                         }
-                    }
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(text = user.bikeModel, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text(text = "${user.bikeSpecs} | ${user.bikeYear} | ${user.bikeColor}", color = Color.Gray)
-                    
-                    Divider(modifier = Modifier.padding(vertical = 12.dp))
-                    
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        BikeSpecItem("Motor", user.bikeSpecs.take(5))
-                        BikeSpecItem("Año", user.bikeYear)
-                        BikeSpecItem("Estado", user.bikeStatus)
                     }
                 }
             }
         }
+
         item {
             Spacer(modifier = Modifier.height(16.dp))
             Button(
                 onClick = { navController.navigate(Screen.Maintenance.route) },
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
             ) {
-                Icon(Icons.Default.List, contentDescription = null)
+                Icon(Icons.Default.Build, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Hoja de Vida de la Moto")
+                Text("Hoja de Vida y Mantenimientos")
+            }
+            Spacer(modifier = Modifier.height(32.dp))
+        }
+    }
+
+    if (showAddBikeDialog) {
+        AddBikeDialog(
+            onDismiss = { showAddBikeDialog = false },
+            onSave = { newBike ->
+                scope.launch {
+                    val userId = authManager.getCurrentUserId()
+                    if (userId != null) {
+                        val remoteId = appwrite.syncBike(
+                            userId = userId,
+                            model = newBike.model,
+                            year = newBike.year,
+                            color = newBike.color,
+                            specs = newBike.specs,
+                            status = newBike.status,
+                            currentKm = newBike.currentKm,
+                            picId = null
+                        )
+                        db.bikeDao().insertOrUpdate(newBike.copy(remoteId = remoteId))
+                        Toast.makeText(context, "Moto añadida al garaje", Toast.LENGTH_SHORT).show()
+                    }
+                    showAddBikeDialog = false
+                }
+            }
+        )
+    }
+
+    bikeToEdit?.let { bike ->
+        EditBikeDialog(
+            bike = bike,
+            onDismiss = { bikeToEdit = null },
+            onDelete = {
+                scope.launch {
+                    if (bike.id != 0) {
+                        // 1. Obtener todas las fotos asociadas para borrarlas de Appwrite (Archivos y Documentos)
+                        val photos = db.bikePhotoDao().getPhotosForBike(bike.id).first()
+                        bike.remoteId?.let { remoteBikeId ->
+                            try {
+                                val remotePhotoDocs = appwrite.getBikePhotos(remoteBikeId)
+                                remotePhotoDocs.forEach { doc ->
+                                    val fileId = doc.data["fileId"] as? String
+                                    if (fileId != null) {
+                                        appwrite.deleteFile(fileId, AppwriteManager.BUCKET_BIKES_ID)
+                                    }
+                                    appwrite.deleteBikePhotoDocument(doc.id)
+                                }
+                            } catch (e: Exception) {
+                                Log.e("ProfileScreen", "Error eliminando fotos remotas: ${e.message}")
+                            }
+                        }
+                        
+                        // 2. Borrar la moto de Appwrite (esto borra el documento en COLLECTION_GARAGE_ID)
+                        bike.remoteId?.let { appwrite.deleteRemoteBike(it) }
+                        
+                        // 3. Borrar de la base de datos local (Cascade borrará las fotos en Room)
+                        db.bikeDao().delete(bike)
+                        selectedBikeIndex = 0
+                        Toast.makeText(context, "Moto y sus fotos eliminadas", Toast.LENGTH_SHORT).show()
+                    }
+                    bikeToEdit = null
+                }
+            },
+            onSave = { updatedBike ->
+                scope.launch {
+                    if (bike.id == 0) {
+                        val latestUser = db.userDao().getUserProfileOnce()
+                        if (latestUser != null) {
+                            val userToSave = latestUser.copy(
+                                bikeModel = updatedBike.model,
+                                bikeYear = updatedBike.year,
+                                bikeColor = updatedBike.color,
+                                bikeSpecs = updatedBike.specs,
+                                bikeStatus = updatedBike.status
+                            )
+                            db.userDao().insertOrUpdate(userToSave)
+                            
+                            val userId = authManager.getCurrentUserId()
+                            if (userId != null) {
+                                val profilePicId = appwrite.extractFileIdFromUrl(userToSave.profilePictureUri)
+                                val bikePicId = appwrite.extractFileIdFromUrl(userToSave.bikePictureUri)
+                                appwrite.updateUserProfile(
+                                    userId = userId,
+                                    name = userToSave.name,
+                                    level = userToSave.level,
+                                    bikeModel = userToSave.bikeModel,
+                                    bikeSpecs = userToSave.bikeSpecs,
+                                    bikeYear = userToSave.bikeYear,
+                                    bikeColor = userToSave.bikeColor,
+                                    isIndependent = userToSave.isIndependent,
+                                    profilePic = profilePicId,
+                                    bikePic = bikePicId
+                                )
+                            }
+                        }
+                    } else {
+                        val bikePicId = appwrite.extractFileIdFromUrl(updatedBike.bikePictureUri)
+                        db.bikeDao().insertOrUpdate(updatedBike)
+                        updatedBike.remoteId?.let { rid ->
+                            appwrite.updateRemoteBike(
+                                bikeId = rid,
+                                model = updatedBike.model,
+                                year = updatedBike.year,
+                                color = updatedBike.color,
+                                specs = updatedBike.specs,
+                                status = updatedBike.status,
+                                currentKm = updatedBike.currentKm,
+                                picId = bikePicId
+                            )
+                        }
+                    }
+                    Toast.makeText(context, "Datos actualizados", Toast.LENGTH_SHORT).show()
+                    bikeToEdit = null
+                }
+            }
+        )
+    }
+}
+
+@Composable
+fun EditBikeDialog(
+    bike: com.example.motoday.data.local.entities.BikeEntity,
+    onDismiss: () -> Unit,
+    onDelete: () -> Unit,
+    onSave: (com.example.motoday.data.local.entities.BikeEntity) -> Unit
+) {
+    var model by remember { mutableStateOf(bike.model) }
+    var year by remember { mutableStateOf(bike.year) }
+    var color by remember { mutableStateOf(bike.color) }
+    var specs by remember { mutableStateOf(bike.specs) }
+    var currentKm by remember { mutableStateOf(bike.currentKm.toString()) }
+    var status by remember { mutableStateOf(bike.status) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("¿Eliminar permanentemente?") },
+            text = { Text("Esta acción eliminará la moto y todas sus fotos tanto del teléfono como de la nube de forma definitiva. No podrás deshacer este cambio.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDelete()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Eliminar Todo")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Editar Moto") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(value = model, onValueChange = { model = it }, label = { Text("Modelo") }, modifier = Modifier.fillMaxWidth())
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = year, onValueChange = { year = it }, label = { Text("Año") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = color, onValueChange = { color = it }, label = { Text("Color") }, modifier = Modifier.weight(1f))
+                }
+                OutlinedTextField(value = specs, onValueChange = { specs = it }, label = { Text("Cilindraje / Specs") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = currentKm, onValueChange = { currentKm = it }, label = { Text("Kilometraje Actual") }, modifier = Modifier.fillMaxWidth(), keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number))
+                OutlinedTextField(value = status, onValueChange = { status = it }, label = { Text("Estado") }, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                onSave(bike.copy(model = model, year = year, color = color, specs = specs, status = status, currentKm = currentKm.toIntOrNull() ?: bike.currentKm))
+            }) {
+                Text("Guardar")
+            }
+        },
+        dismissButton = {
+            Row {
+                if (bike.id != 0) {
+                    TextButton(onClick = { showDeleteConfirm = true }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                        Text("Eliminar")
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Cancelar")
+                }
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun BikeCard(
+    model: String,
+    specs: String,
+    year: String,
+    color: String,
+    status: String,
+    images: List<String>,
+    onClick: () -> Unit,
+    onImageClick: (String) -> Unit
+) {
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+        onResult = { uri ->
+            uri?.let { onImageClick(it.toString()) }
+        }
+    )
+
+    val pagerState = rememberPagerState(pageCount = { images.size.coerceAtLeast(1) })
+
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable { onClick() },
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                if (images.isNotEmpty()) {
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxSize()
+                    ) { page ->
+                        AsyncImage(
+                            model = images[page],
+                            contentDescription = "Foto de la moto ${page + 1}",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                    
+                    // Indicador de añadir más fotos
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.5f))
+                            .clickable {
+                                launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.AddAPhoto, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    }
+
+                    // Indicador de páginas (dots)
+                    if (images.size > 1) {
+                        Row(
+                            Modifier
+                                .height(20.dp)
+                                .fillMaxWidth()
+                                .align(Alignment.BottomCenter),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            repeat(images.size) { iteration ->
+                                val colorActive = if (pagerState.currentPage == iteration) Color.White else Color.White.copy(alpha = 0.5f)
+                                Box(
+                                    modifier = Modifier
+                                        .padding(2.dp)
+                                        .clip(CircleShape)
+                                        .background(colorActive)
+                                        .size(6.dp)
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxSize().clickable {
+                            launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(40.dp), tint = Color.Gray)
+                        Text("Añadir foto", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(text = model, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(text = "$specs | $year | $color", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+            
+            Divider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                BikeSpecItem("Motor", specs.take(8))
+                BikeSpecItem("Año", year)
+                BikeSpecItem("Estado", status)
             }
         }
     }
+}
+
+@Composable
+fun AddBikeDialog(onDismiss: () -> Unit, onSave: (com.example.motoday.data.local.entities.BikeEntity) -> Unit) {
+    var model by remember { mutableStateOf("") }
+    var year by remember { mutableStateOf("") }
+    var color by remember { mutableStateOf("") }
+    var specs by remember { mutableStateOf("") }
+    var currentKm by remember { mutableStateOf("0") }
+    var status by remember { mutableStateOf("Excelente") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Añadir Moto al Garaje") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(value = model, onValueChange = { model = it }, label = { Text("Modelo (Ej: Yamaha R3)") }, modifier = Modifier.fillMaxWidth())
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = year, onValueChange = { year = it }, label = { Text("Año") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = color, onValueChange = { color = it }, label = { Text("Color") }, modifier = Modifier.weight(1f))
+                }
+                OutlinedTextField(value = specs, onValueChange = { specs = it }, label = { Text("Cilindraje / Specs") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = currentKm, onValueChange = { currentKm = it }, label = { Text("Kilometraje Inicial") }, modifier = Modifier.fillMaxWidth(), keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number))
+                OutlinedTextField(value = status, onValueChange = { status = it }, label = { Text("Estado") }, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                if (model.isNotBlank()) {
+                    onSave(com.example.motoday.data.local.entities.BikeEntity(
+                        model = model,
+                        year = year,
+                        color = color,
+                        specs = specs,
+                        status = status,
+                        currentKm = currentKm.toIntOrNull() ?: 0
+                    ))
+                }
+            }) {
+                Text("Guardar")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancelar")
+            }
+        }
+    )
 }
 
 @Composable
@@ -669,8 +1391,6 @@ fun CityStamp(stamp: com.example.motoday.data.local.entities.PassportStampEntity
         animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy),
         label = "rotation"
     )
-
-    if (isVisible) { }
 
     val stampConfig = when (stamp.iconResName) {
         "ic_stamp_machala" -> StampStyle(Color(0xFFFFD700), Icons.Default.Agriculture, "MACHALA") 
@@ -787,6 +1507,7 @@ fun StatsSection(user: UserEntity) {
     val context = LocalContext.current
     val db = AppDatabase.getDatabase(context)
     val stamps by db.passportDao().getAllStamps().collectAsState(initial = emptyList())
+    val rides by db.rideDao().getAllRides().collectAsState(initial = emptyList())
 
     LazyColumn(modifier = Modifier.padding(16.dp).fillMaxSize()) {
         item {
@@ -797,9 +1518,14 @@ fun StatsSection(user: UserEntity) {
         item {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val unit = if (user.useMiles) "Mi" else "Kms"
+                
+                // Calcular KM reales sumando distancias si el campo totalKilometers está desactualizado
+                // pero por ahora priorizamos lo que diga el objeto user sincronizado.
                 val distance = if (user.useMiles) (user.totalKilometers * 0.621371).toInt() else user.totalKilometers
                 Box(modifier = Modifier.weight(1f)) { StatCard(unit, "$distance", Icons.Default.Place, MaterialTheme.colorScheme.primary) }
-                Box(modifier = Modifier.weight(1f)) { StatCard("Rutas", "${user.ridesCompleted}", Icons.Default.CheckCircle, Color(0xFF4CAF50)) }
+                
+                val completedRidesCount = rides.count { it.status == "COMPLETED" }
+                Box(modifier = Modifier.weight(1f)) { StatCard("Rutas", "$completedRidesCount", Icons.Default.CheckCircle, Color(0xFF4CAF50)) }
             }
         }
 
@@ -809,8 +1535,8 @@ fun StatsSection(user: UserEntity) {
             Spacer(modifier = Modifier.height(8.dp))
         }
 
-        items(stamps.size) { index ->
-            val stamp = stamps[index]
+        items(stamps.distinctBy { it.rideId }.size) { index ->
+            val stamp = stamps.distinctBy { it.rideId }[index]
             val sdf = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
             Card(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -858,8 +1584,6 @@ fun AchievementItem(title: String, desc: String, isUnlocked: Boolean) {
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
         label = "achScale"
     )
-
-    if (isVisible) { }
 
     LaunchedEffect(isUnlocked) {
         if (isUnlocked) isVisible = true
