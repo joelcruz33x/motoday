@@ -16,7 +16,7 @@ import com.example.motoday.data.remote.AuthManager
 import com.example.motoday.ui.screens.*
 
 @Composable
-fun AppNavigation() {
+fun AppNavigation(sharedText: String? = null) {
     val navController = rememberNavController()
     val context = LocalContext.current
     val authManager = remember { AuthManager(context) }
@@ -32,7 +32,10 @@ fun AppNavigation() {
         val isLoggedIn = authManager.isUserLoggedIn()
         
         startDestination = when {
-            isLoggedIn -> Screen.Home.route
+            isLoggedIn -> {
+                if (sharedText != null) Screen.Groups.createRoute(sharedText)
+                else Screen.Home.route
+            }
             !hasSeenWelcome -> Screen.Welcome.route
             else -> Screen.Login.route
         }
@@ -64,8 +67,16 @@ fun AppNavigation() {
             composable(Screen.Explore.route) {
                 ExploreScreen(navController)
             }
-            composable(Screen.Groups.route) {
-                GroupsScreen(navController)
+            composable(
+                route = Screen.Groups.route,
+                arguments = listOf(navArgument("sharedText") { 
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                })
+            ) { backStackEntry ->
+                val sharedTextParam = backStackEntry.arguments?.getString("sharedText")
+                GroupsScreen(navController, sharedText = sharedTextParam)
             }
             composable(Screen.Profile.route) {
                 ProfileScreen(navController)
@@ -84,6 +95,9 @@ fun AppNavigation() {
             }
             composable(Screen.Settings.route) {
                 SettingsScreen(navController)
+            }
+            composable(Screen.Store.route) {
+                StoreScreen(navController)
             }
             composable(
                 route = Screen.GroupSettings.route,

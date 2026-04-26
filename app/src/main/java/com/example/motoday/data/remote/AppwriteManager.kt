@@ -371,6 +371,41 @@ class AppwriteManager(context: Context) {
         }
     }
 
+    suspend fun deleteGroup(groupId: String): Boolean {
+        return try {
+            // 1. Obtener info del grupo para borrar su foto
+            val group = databases.getDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId)
+            val photoId = group.data["photoUrl"] as? String
+            
+            // 2. Borrar foto si existe
+            if (!photoId.isNullOrBlank()) {
+                deleteFile(photoId, BUCKET_GROUPS_ID)
+            }
+
+            // 3. Borrar mensajes del chat del grupo
+            val messages = databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_MESSAGES_ID,
+                queries = listOf(Query.equal("groupId", groupId))
+            ).documents
+            
+            messages.forEach { msg ->
+                try {
+                    databases.deleteDocument(DATABASE_ID, COLLECTION_MESSAGES_ID, msg.id)
+                } catch (e: Exception) {
+                    Log.e("AppwriteManager", "Error borrando mensaje ${msg.id}: ${e.message}")
+                }
+            }
+
+            // 4. Borrar el documento del grupo
+            databases.deleteDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId)
+            true
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error deleteGroup: ${e.message}")
+            false
+        }
+    }
+
     suspend fun joinGroup(groupId: String, userId: String, currentMembers: List<String>): Boolean {
         return try {
             val updatedMembers = currentMembers.toMutableList()
@@ -509,26 +544,29 @@ class AppwriteManager(context: Context) {
             databases.listDocuments(
                 databaseId = DATABASE_ID,
                 collectionId = COLLECTION_MESSAGES_ID,
-                queries = listOf(Query.equal("groupId", groupId), Query.orderAsc("timestamp"))
+                queries = listOf(Query.equal("groupId", groupId), Query.orderAsc("timestamp"), Query.limit(100))
             ).documents
         } catch (e: Exception) {
             emptyList()
         }
     }
 
-    suspend fun sendMessage(groupId: String, senderId: String, senderName: String, text: String): String? {
+    suspend fun sendMessage(groupId: String, senderId: String, senderName: String, text: String, imageUrl: String? = null): String? {
         return try {
+            val data = mutableMapOf(
+                "groupId" to groupId,
+                "senderId" to senderId,
+                "senderName" to senderName,
+                "text" to text,
+                "timestamp" to System.currentTimeMillis()
+            )
+            if (imageUrl != null) data["imageUrl"] = imageUrl
+
             val response = databases.createDocument(
                 databaseId = DATABASE_ID,
                 collectionId = COLLECTION_MESSAGES_ID,
                 documentId = UUID.randomUUID().toString(),
-                data = mapOf(
-                    "groupId" to groupId,
-                    "senderId" to senderId,
-                    "senderName" to senderName,
-                    "text" to text,
-                    "timestamp" to System.currentTimeMillis()
-                )
+                data = data
             )
             response.id
         } catch (e: Exception) {
@@ -712,6 +750,49 @@ class AppwriteManager(context: Context) {
         }
     }
 
+    // --- RIDES ---
+    suspend fun getAllRemoteRides(): List<Document<Map<String, Any>>> {
+        return try {
+            databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_RIDES_ID,
+                queries = listOf(io.appwrite.Query.orderAsc("date"))
+            ).documents
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error getAllRemoteRides: ${e.message}")
+            emptyList()
+        }
+    }
+
+    suspend fun createRemoteRide(data: Map<String, Any>): String? {
+        return try {
+            val response = databases.createDocument(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_RIDES_ID,
+                documentId = io.appwrite.ID.unique(),
+                data = data
+            )
+            response.id
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error createRemoteRide: ${e.message}")
+            null
+        }
+    }
+
+    suspend fun updateRemoteRide(rideId: String, data: Map<String, Any>): Boolean {
+        return try {
+            databases.updateDocument(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_RIDES_ID,
+                documentId = rideId,
+                data = data
+            )
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     suspend fun deleteBikePhotoDocument(documentId: String): Boolean {
         return try {
             databases.deleteDocument(DATABASE_ID, COLLECTION_BIKE_PHOTOS_ID, documentId)
@@ -743,7 +824,9 @@ class AppwriteManager(context: Context) {
         // Si ya es una URL completa, no la construimos
         if (fileId.startsWith("http")) return fileId
         
-        return "https://nyc.cloud.appwrite.io/v1/storage/buckets/$bucketId/files/$fileId/view?project=69e6836b00267f431c20"
+        // Optimizamos la carga añadiendo parámetros de previsualización (view) de Appwrite
+        // width=1080 para calidad HD pero optimizada para móvil, quality=80 para ahorrar ancho de banda
+        return "https://nyc.cloud.appwrite.io/v1/storage/buckets/$bucketId/files/$fileId/view?project=69e6836b00267f431c20&width=1080&quality=80"
     }
 
     fun extractFileIdFromUrl(url: String?): String? {

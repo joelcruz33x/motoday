@@ -51,6 +51,7 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
     val scope = rememberCoroutineScope()
     val appwrite = remember { AppwriteManager.getInstance(context) }
     val authManager = remember { AuthManager(context) }
+    val notificationHelper = remember { NotificationHelper(context) }
     
     var ride by remember { mutableStateOf<RideEntity?>(null) }
     
@@ -107,22 +108,29 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // Contenedor de etiquetas con peso para que el botón tenga su espacio
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
                                 val diffColor = when (currentRide.difficulty) {
                                     "Fácil" -> Color(0xFF4CAF50)
                                     "Intermedio" -> Color(0xFFFF9800)
                                     "Difícil" -> Color(0xFFF44336)
                                     else -> null
                                 }
-                                CategoryCard("Dificultad", currentRide.difficulty, Icons.Default.TrendingUp, diffColor)
-                                CategoryCard("Terreno", currentRide.terrainType, Icons.Default.Landscape, Color(0xFF757575))
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    CategoryCard("Dificultad", currentRide.difficulty, Icons.Default.TrendingUp, diffColor)
+                                    CategoryCard("Terreno", currentRide.terrainType, Icons.Default.Landscape, Color(0xFF757575))
+                                }
                             }
                             
+                            Spacer(modifier = Modifier.width(8.dp))
+                            
                             if (currentRide.status == "PLANNED") {
-                                Card(
+                                Button(
                                     onClick = {
                                         scope.launch {
                                             val updatedRide = currentRide.copy(
@@ -132,17 +140,19 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                                             db.rideDao().updateRide(updatedRide)
                                         }
                                     },
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = if (currentRide.isAttending) Color(0xFF4CAF50) else Color(0xFFE0E0E0)
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (currentRide.isAttending) Color(0xFF4CAF50) else MaterialTheme.colorScheme.secondaryContainer,
+                                        contentColor = if (currentRide.isAttending) Color.White else MaterialTheme.colorScheme.onSecondaryContainer
                                     ),
-                                    shape = RoundedCornerShape(8.dp)
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                    modifier = Modifier.wrapContentWidth()
                                 ) {
                                     Text(
                                         text = if (currentRide.isAttending) "Asistiré" else "Asistir",
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                                         style = MaterialTheme.typography.labelLarge,
-                                        color = if (currentRide.isAttending) Color.White else Color.Black,
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.ExtraBold,
+                                        maxLines = 1 // Evita el texto vertical
                                     )
                                 }
                             } else if (!currentRide.isAttending) {
@@ -230,9 +240,41 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                                     
                                     val user = db.userDao().getUserProfileOnce()
                                     user?.let { currentProfile ->
-                                        val newKms = currentProfile.totalKilometers + distanceKm
-                                        val newRides = currentProfile.ridesCompleted + 1
-                                        db.userDao().insertOrUpdate(currentProfile.copy(ridesCompleted = newRides, totalKilometers = newKms))
+                                        val oldRides = currentProfile.ridesCompleted
+                                        val oldKms = currentProfile.totalKilometers
+                                        val newKms = oldKms + distanceKm
+                                        val newRides = oldRides + 1
+                                        
+                                        // Lógica de progresión de nivel
+                                        val newLevel = when (currentProfile.level) {
+                                            "Experto" -> "Experto"
+                                            "Intermedio" -> if (newKms > 10000) "Experto" else "Intermedio"
+                                            else -> { // Novato
+                                                if (newKms > 10000) "Experto"
+                                                else if (newKms > 2500) "Intermedio"
+                                                else "Novato"
+                                            }
+                                        }
+
+                                        val updatedProfile = currentProfile.copy(
+                                            ridesCompleted = newRides,
+                                            totalKilometers = newKms,
+                                            level = newLevel
+                                        )
+                                        db.userDao().insertOrUpdate(updatedProfile)
+
+                                        // Notificaciones de Cambio de Nivel
+                                        if (newLevel != currentProfile.level) {
+                                            notificationHelper.showAchievementUnlocked("¡Ascenso de Rango!", "Has subido a nivel $newLevel.")
+                                        }
+
+                                        // Disparar Notificaciones de Logros
+                                        if (oldRides == 0 && newRides >= 1) {
+                                            notificationHelper.showAchievementUnlocked("Bautizo de Asfalto", "Has completado tu primera rodada.")
+                                        }
+                                        if (oldKms < 500 && newKms >= 500) {
+                                            notificationHelper.showAchievementUnlocked("Tragakilómetros", "Has superado los 500km totales.")
+                                        }
 
                                         // ACTUALIZACIÓN DE LA MOTO PRINCIPAL
                                         scope.launch(Dispatchers.IO) {
@@ -244,15 +286,15 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                                                     val bikePicId = appwrite.extractFileIdFromUrl(currentProfile.bikePictureUri)
                                                     appwrite.updateUserProfile(
                                                         userId = userId,
-                                                        name = currentProfile.name,
-                                                        level = currentProfile.level,
-                                                        bikeModel = currentProfile.bikeModel,
-                                                        bikeSpecs = currentProfile.bikeSpecs,
-                                                        bikeYear = currentProfile.bikeYear,
-                                                        bikeColor = currentProfile.bikeColor,
+                                                        name = updatedProfile.name,
+                                                        level = updatedProfile.level,
+                                                        bikeModel = updatedProfile.bikeModel,
+                                                        bikeSpecs = updatedProfile.bikeSpecs,
+                                                        bikeYear = updatedProfile.bikeYear,
+                                                        bikeColor = updatedProfile.bikeColor,
                                                         totalKm = newKms,
                                                         rides = newRides,
-                                                        isIndependent = currentProfile.isIndependent,
+                                                        isIndependent = updatedProfile.isIndependent,
                                                         profilePic = profilePicId,
                                                         bikePic = bikePicId
                                                     )
@@ -318,6 +360,16 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                                         date = System.currentTimeMillis()
                                     )
                                     db.passportDao().insertStamp(newStamp)
+                                    notificationHelper.showNewPassportStamp(detectedCity)
+
+                                    val totalUniqueCities = withContext(Dispatchers.IO) {
+                                        db.passportDao().getUniqueCitiesCount()
+                                    }
+                                    if (totalUniqueCities == 3) {
+                                        notificationHelper.showAchievementUnlocked("Explorador Regional", "Has visitado 3 ciudades diferentes.")
+                                    } else if (totalUniqueCities == 10) {
+                                        notificationHelper.showAchievementUnlocked("Leyenda de la Carretera", "Has visitado 10 ciudades diferentes.")
+                                    }
                                     
                                     scope.launch(Dispatchers.IO) {
                                         try {
@@ -344,28 +396,28 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
 
 @Composable
 fun CategoryCard(label: String, value: String, icon: ImageVector, containerColor: Color? = null) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = containerColor ?: MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        ),
-        shape = RoundedCornerShape(8.dp)
+    Surface(
+        color = containerColor ?: MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(6.dp),
+        modifier = Modifier.wrapContentWidth()
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp), 
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp), 
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 icon, 
                 null, 
-                modifier = Modifier.size(16.dp), 
+                modifier = Modifier.size(12.dp), 
                 tint = if (containerColor != null) Color.White else MaterialTheme.colorScheme.primary
             )
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(4.dp))
             Text(
-                text = "$label: $value",
+                text = value, // Solo mostramos el valor para ahorrar espacio
                 style = MaterialTheme.typography.labelSmall, 
                 fontWeight = FontWeight.Bold,
-                color = if (containerColor != null) Color.White else Color.Unspecified
+                color = if (containerColor != null) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
             )
         }
     }

@@ -179,80 +179,7 @@ fun GroupSettingsScreen(navController: NavController, groupId: String) {
                     }
                 }
 
-                // SECCIÓN 2: ASIGNAR ROLES (Solo visible para Admin)
-                if (isAdmin) {
-                    item {
-                        Text("Gestionar Cargos / Roles", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
-                            shape = RoundedCornerShape(16.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(8.dp)) {
-                                membersProfiles.filter { it.id != currentUserId }.forEach { member ->
-                                    val memberId = member.id
-                                    val memberName = member.data["name"] as? String ?: "Motero"
-                                    val currentRole = rolesMap[memberId]
-                                    
-                                    var showRoleMenu by remember { mutableStateOf(false) }
-
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(memberName, fontWeight = FontWeight.Bold)
-                                            Text(currentRole ?: "Sin cargo", fontSize = 12.sp, color = if (currentRole != null) MaterialTheme.colorScheme.primary else Color.Gray)
-                                        }
-                                        
-                                        Box {
-                                            Button(
-                                                onClick = { showRoleMenu = true },
-                                                contentPadding = PaddingValues(horizontal = 12.dp),
-                                                modifier = Modifier.height(32.dp)
-                                            ) {
-                                                Text("Asignar", fontSize = 12.sp)
-                                            }
-                                            DropdownMenu(expanded = showRoleMenu, onDismissRequest = { showRoleMenu = false }) {
-                                                availableRoles.forEach { role ->
-                                                    DropdownMenuItem(
-                                                        text = { Text(role) },
-                                                        onClick = {
-                                                            scope.launch {
-                                                                if (appwrite.updateMemberRole(groupId, memberId, role)) {
-                                                                    // Recargar datos
-                                                                    groupDoc = appwrite.getGroup(groupId)
-                                                                }
-                                                            }
-                                                            showRoleMenu = false
-                                                        }
-                                                    )
-                                                }
-                                                Divider()
-                                                DropdownMenuItem(
-                                                    text = { Text("Quitar Cargo", color = Color.Red) },
-                                                    onClick = {
-                                                        scope.launch {
-                                                            if (appwrite.updateMemberRole(groupId, memberId, null)) {
-                                                                groupDoc = appwrite.getGroup(groupId)
-                                                            }
-                                                        }
-                                                        showRoleMenu = false
-                                                    }
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                                if (membersProfiles.size <= 1) {
-                                    Text("No hay otros miembros para asignar roles.", modifier = Modifier.padding(16.dp), fontSize = 12.sp, color = Color.Gray)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // SECCIÓN 3: LISTA DE MIEMBROS (Lectura)
+                // SECCIÓN 2: LISTA DE MIEMBROS CON GESTIÓN INTEGRADA
                 item {
                     Text("Miembros (${membersProfiles.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
@@ -264,13 +191,15 @@ fun GroupSettingsScreen(navController: NavController, groupId: String) {
                     val memberPhoto = member.data["profilePic"] as? String
                     val memberRole = rolesMap[memberId]
                     val memberLevel = member.data["level"] as? String ?: "Novato"
+                    
+                    var showRoleMenu by remember { mutableStateOf(false) }
 
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
-                            modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant),
+                            modifier = Modifier.size(48.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant),
                             contentAlignment = Alignment.Center
                         ) {
                             if (!memberPhoto.isNullOrEmpty()) {
@@ -284,18 +213,73 @@ fun GroupSettingsScreen(navController: NavController, groupId: String) {
                                 Icon(Icons.Default.Person, contentDescription = null, tint = Color.Gray)
                             }
                         }
+                        
                         Spacer(modifier = Modifier.width(12.dp))
-                        Column {
+                        
+                        Column(modifier = Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(memberName, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    text = if (memberId == currentUserId) "$memberName (Tú)" else memberName,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                                 if (memberId == groupDoc?.data?.get("adminId")) {
-                                    Icon(Icons.Default.Stars, contentDescription = null, modifier = Modifier.padding(start = 4.dp).size(14.dp), tint = Color(0xFFFFB100))
+                                    Icon(Icons.Default.Stars, contentDescription = "Admin", modifier = Modifier.padding(start = 4.dp).size(14.dp), tint = Color(0xFFFFB100))
                                 }
                             }
-                            Text("$memberLevel • ${memberRole ?: "Miembro"}", fontSize = 12.sp, color = Color.Gray)
+                            Text(
+                                text = "$memberLevel • ${memberRole ?: "Miembro"}",
+                                fontSize = 12.sp,
+                                color = if (memberRole != null) MaterialTheme.colorScheme.primary else Color.Gray
+                            )
+                        }
+
+                        if (isAdmin) {
+                            Box {
+                                IconButton(onClick = { showRoleMenu = true }) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = "Opciones")
+                                }
+                                DropdownMenu(expanded = showRoleMenu, onDismissRequest = { showRoleMenu = false }) {
+                                    Text("Asignar Cargo", modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                    availableRoles.forEach { role ->
+                                        DropdownMenuItem(
+                                            text = { Text(role) },
+                                            onClick = {
+                                                scope.launch {
+                                                    if (appwrite.updateMemberRole(groupId, memberId, role)) {
+                                                        groupDoc = appwrite.getGroup(groupId)
+                                                    }
+                                                }
+                                                showRoleMenu = false
+                                            }
+                                        )
+                                    }
+                                    Divider()
+                                    DropdownMenuItem(
+                                        text = { 
+                                            Text(
+                                                text = if (memberRole == null) "Degradar a Prospecto" else "Quitar Cargo", 
+                                                color = Color.Red
+                                            ) 
+                                        },
+                                        onClick = {
+                                            scope.launch {
+                                                // Lógica: 
+                                                // 1. Si es Miembro (null), baja a Prospecto.
+                                                // 2. Si tiene cargo, baja a Miembro (null).
+                                                val newRole = if (memberRole == null) "Prospecto" else null
+                                                if (appwrite.updateMemberRole(groupId, memberId, newRole)) {
+                                                    groupDoc = appwrite.getGroup(groupId)
+                                                }
+                                            }
+                                            showRoleMenu = false
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
+
                 
                 item { Spacer(modifier = Modifier.height(40.dp)) }
             }

@@ -17,8 +17,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavController
+import android.widget.Toast
 import com.example.motoday.data.local.AppDatabase
 import com.example.motoday.data.local.entities.RideEntity
+import com.example.motoday.data.remote.AppwriteManager
+import com.example.motoday.data.remote.AuthManager
 import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -34,6 +37,8 @@ fun CreateRideScreen(navController: NavController) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val db = AppDatabase.getDatabase(context)
+    val appwrite = remember { AppwriteManager.getInstance(context) }
+    val authManager = remember { AuthManager(context) }
 
     var title by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
@@ -245,6 +250,37 @@ fun CreateRideScreen(navController: NavController) {
             Button(
                 onClick = {
                     scope.launch {
+                        val userId = authManager.getCurrentUserId() ?: "anonymous"
+                        val userProfile = db.userDao().getUserProfileOnce()
+                        val creatorName = userProfile?.name ?: "MotoDay User"
+
+                        val stopsList = scheduledStops.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+
+                        // 1. Datos para Appwrite
+                        val remoteData = mapOf(
+                            "title" to title,
+                            "description" to description,
+                            "date" to selectedDate,
+                            "startLocation" to startLoc,
+                            "endLocation" to endLoc,
+                            "startLat" to startLat,
+                            "startLng" to startLng,
+                            "endLat" to endLat,
+                            "endLng" to endLng,
+                            "meetingPoint" to meetingPoint,
+                            "scheduledStops" to stopsList,
+                            "difficulty" to difficulty,
+                            "terrainType" to terrainType,
+                            "creatorName" to creatorName,
+                            "creatorId" to userId,
+                            "status" to "PLANNED",
+                            "participantIds" to listOf(userId)
+                        )
+
+                        // 2. Crear en Appwrite
+                        val remoteId = appwrite.createRemoteRide(remoteData)
+
+                        // 3. Crear Localmente (usando el ID remoto si se pudo crear)
                         val newRide = RideEntity(
                             title = title,
                             description = description,
@@ -258,9 +294,15 @@ fun CreateRideScreen(navController: NavController) {
                             meetingPoint = meetingPoint,
                             scheduledStops = scheduledStops,
                             difficulty = difficulty,
-                            terrainType = terrainType
+                            terrainType = terrainType,
+                            creatorName = creatorName,
+                            isAttending = true,
+                            participantsCount = 1,
+                            isSynced = remoteId != null
                         )
                         db.rideDao().insertRide(newRide)
+                        
+                        Toast.makeText(context, "¡Rodada publicada con éxito!", Toast.LENGTH_SHORT).show()
                         navController.popBackStack()
                     }
                 },

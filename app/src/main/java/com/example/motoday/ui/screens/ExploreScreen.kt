@@ -1,7 +1,10 @@
 package com.example.motoday.ui.screens
 
+import android.util.Log
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -14,8 +17,12 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import androidx.compose.ui.platform.LocalContext
 import com.example.motoday.data.local.AppDatabase
+import com.example.motoday.data.remote.AppwriteManager
+import com.example.motoday.data.remote.AuthManager
 import com.example.motoday.navigation.Screen
 import com.example.motoday.ui.components.BottomNavigationBar
+import io.appwrite.models.Document
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -24,7 +31,35 @@ import java.util.*
 fun ExploreScreen(navController: NavController) {
     val context = LocalContext.current
     val db = AppDatabase.getDatabase(context)
-    val rides by db.rideDao().getAllRides().collectAsState(initial = emptyList())
+    val appwrite = remember { AppwriteManager.getInstance(context) }
+    val authManager = remember { AuthManager(context) }
+    val scope = rememberCoroutineScope()
+
+    val localRides by db.rideDao().getAllRides().collectAsState(initial = emptyList())
+    
+    // Estado para rodadas remotas
+    var remoteRides by remember { mutableStateOf<List<Document<Map<String, Any>>>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    // Función para cargar rodadas
+    fun refreshRides() {
+        isLoading = true
+        scope.launch {
+            try {
+                val result = appwrite.getAllRemoteRides()
+                Log.d("ExploreScreen", "Rodadas remotas cargadas: ${result.size}")
+                remoteRides = result
+            } catch (e: Exception) {
+                Log.e("ExploreScreen", "Error cargando rodadas: ${e.message}")
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        refreshRides()
+    }
 
     // Limpieza automática de rutas finalizadas hace más de 1 hora
     LaunchedEffect(Unit) {
@@ -35,7 +70,12 @@ fun ExploreScreen(navController: NavController) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Explorar Rodadas") }
+                title = { Text("Explorar Rodadas") },
+                actions = {
+                    IconButton(onClick = { refreshRides() }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refrescar")
+                    }
+                }
             )
         },
         floatingActionButton = {
@@ -62,7 +102,7 @@ fun ExploreScreen(navController: NavController) {
                 Text(text = "Rodadas Programadas", style = MaterialTheme.typography.headlineSmall)
             }
             
-            if (rides.isEmpty()) {
+            if (localRides.isEmpty() && remoteRides.isEmpty() && !isLoading) {
                 item {
                     Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                         Text("No hay rodadas programadas. ¡Crea una!", color = Color.Gray)
@@ -70,8 +110,17 @@ fun ExploreScreen(navController: NavController) {
                 }
             }
 
-            items(rides.size) { index ->
-                val ride = rides[index]
+            if (isLoading) {
+                item {
+                    Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                }
+            }
+
+            // Mostrar Rodadas Locales Primero (las que el usuario creó o está siguiendo)
+            items(localRides.size) { index ->
+                val ride = localRides[index]
                 val sdf = SimpleDateFormat("dd MMM, yyyy - hh:mm a", Locale.getDefault())
                 val dateString = sdf.format(Date(ride.date))
 
@@ -90,6 +139,68 @@ fun ExploreScreen(navController: NavController) {
                     participantsCount = ride.participantsCount,
                     onClick = {
                         navController.navigate(Screen.RideDetail.createRoute(ride.id))
+                    }
+                )
+            }
+
+            // Mostrar Rodadas Remotas (que no están en la DB local)
+            val filteredRemoteRides = remoteRides.filter { remote ->
+                val remoteTitle = remote.data["title"]?.toString() ?: ""
+                val remoteDate = (remote.data["date"] as? Number)?.toLong() ?: 0L
+                localRides.none { local -> 
+                    local.title == remoteTitle && Math.abs(local.date - remoteDate) < 1000 
+                }
+            }
+
+            items(filteredRemoteRides.size) { index ->
+                val doc = filteredRemoteRides[index]
+                val data = doc.data
+                val sdf = SimpleDateFormat("dd MMM, yyyy - hh:mm a", Locale.getDefault())
+                val dateLong = (data["date"] as? Number)?.toLong() ?: 0L
+                val dateString = sdf.format(Date(dateLong))
+                
+                val participants = (data["participantIds"] as? List<*>)?.size ?: 0
+
+                RideCard(
+                    title = data["title"].toString(),
+                    difficulty = data["difficulty"].toString(),
+                    terrainType = data["terrainType"].toString(),
+                    date = dateString,
+                    location = "Desde: ${data["startLocation"]} hasta ${data["endLocation"]}",
+                    status = "Disponible",
+                    participantsCount = participants,
+                    onClick = {
+                        scope.launch {
+                            try {
+                                // 1. Mapear datos remotos a Entidad Local
+                                val newRide = com.example.motoday.data.local.entities.RideEntity(
+                                    title = data["title"].toString(),
+                                    description = data["description"].toString(),
+                                    date = dateLong,
+                                    startLocation = data["startLocation"].toString(),
+                                    endLocation = data["endLocation"].toString(),
+                                    startLat = (data["startLat"] as? Number)?.toDouble() ?: 0.0,
+                                    startLng = (data["startLng"] as? Number)?.toDouble() ?: 0.0,
+                                    endLat = (data["endLat"] as? Number)?.toDouble() ?: 0.0,
+                                    endLng = (data["endLng"] as? Number)?.toDouble() ?: 0.0,
+                                    meetingPoint = data["meetingPoint"].toString(),
+                                    scheduledStops = (data["scheduledStops"] as? List<*>)?.joinToString(", ") ?: "",
+                                    difficulty = data["difficulty"].toString(),
+                                    terrainType = data["terrainType"].toString(),
+                                    creatorName = data["creatorName"].toString(),
+                                    isAttending = false,
+                                    participantsCount = participants,
+                                    isSynced = true
+                                )
+                                
+                                // 2. Guardar localmente
+                                db.rideDao().insertRide(newRide)
+                                Toast.makeText(context, "¡Ruta añadida a tu agenda!", Toast.LENGTH_SHORT).show()
+                                
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Error al importar ruta: ${e.message}", Toast.LENGTH_LONG).show()
+                            }
+                        }
                     }
                 )
             }

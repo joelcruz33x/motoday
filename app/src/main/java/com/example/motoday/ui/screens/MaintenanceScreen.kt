@@ -286,11 +286,11 @@ fun HealthSummarySection(
         logs
     }
     
-    val lastOilKm = filteredLogs.filter { it.type == "Aceite" }.maxByOrNull { it.mileage }?.mileage ?: 0
-    val lastTiresKm = filteredLogs.filter { it.type == "Llantas" }.maxByOrNull { it.mileage }?.mileage ?: 0
+    val lastOilKm = filteredLogs.filter { it.type == "Aceite" }.maxByOrNull { it.date }?.mileage ?: 0
+    val lastTiresKm = filteredLogs.filter { it.type == "Llantas" }.maxByOrNull { it.date }?.mileage ?: 0
 
     val oilInterval = 3000
-    val tiresInterval = 15000
+    val tiresInterval = 12000
 
     val oilRemaining = (lastOilKm + oilInterval) - currentKm
     val tiresRemaining = (lastTiresKm + tiresInterval) - currentKm

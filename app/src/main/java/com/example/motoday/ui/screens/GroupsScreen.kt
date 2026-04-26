@@ -1,8 +1,13 @@
 package com.example.motoday.ui.screens
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -37,6 +42,8 @@ import com.example.motoday.ui.components.BottomNavigationBar
 import kotlinx.coroutines.launch
 import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.data.remote.AuthManager
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import io.appwrite.models.Document
@@ -56,6 +63,7 @@ data class ChatMessage(
     val imageUri: String? = null,
     val fileUri: String? = null,
     val fileName: String? = null,
+    val isLocation: Boolean = false,
     val id: String = UUID.randomUUID().toString(),
     val status: MessageStatus = MessageStatus.SENT
 )
@@ -70,7 +78,7 @@ data class GroupInfo(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GroupsScreen(navController: NavController) {
+fun GroupsScreen(navController: NavController, sharedText: String? = null) {
     val context = LocalContext.current
     val appwrite = remember { AppwriteManager.getInstance(context) }
     val authManager = remember { AuthManager(context) }
@@ -80,12 +88,24 @@ fun GroupsScreen(navController: NavController) {
     var currentUserId by remember { mutableStateOf<String?>(null) }
     var currentUserName by remember { mutableStateOf("Motero") }
     var isLoading by remember { mutableStateOf(true) }
-    
+
+    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+
     var selectedGroupId by remember { mutableStateOf<String?>(null) }
+    var messageText by remember { mutableStateOf(sharedText ?: "") }
+    
+    // Si hay un sharedText externo, lo actualizamos en el estado local
+    LaunchedEffect(sharedText) {
+        if (sharedText != null) {
+            messageText = sharedText
+        }
+    }
+
     var isExploring by remember { mutableStateOf(true) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var showMembersDialog by remember { mutableStateOf(false) }
     var showRequestsDialog by remember { mutableStateOf(false) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     
     val selectedGroup = allGroups.find { it.id == selectedGroupId }
@@ -101,7 +121,6 @@ fun GroupsScreen(navController: NavController) {
         }
     }
     
-    var messageText by remember { mutableStateOf("") }
     val chatMessages = remember { mutableStateListOf<ChatMessage>() }
     val listState = rememberLazyListState()
 
@@ -115,12 +134,24 @@ fun GroupsScreen(navController: NavController) {
             remoteMessages.forEach { doc ->
                 val senderId = doc.data["senderId"] as? String ?: ""
                 val ts = doc.data["timestamp"] as? Number ?: 0L
+                val rawImageUrl = doc.data["imageUrl"] as? String
+                val finalImageUrl = if (!rawImageUrl.isNullOrEmpty()) {
+                    appwrite.getImageUrl(rawImageUrl, AppwriteManager.BUCKET_GROUPS_ID)
+                } else null
+
+                val text = doc.data["text"] as? String ?: ""
+                val isLocation = text.contains("google.com/maps") || 
+                               text.contains("maps.app.goo.gl") || 
+                               text.contains("waze.com")
+
                 chatMessages.add(ChatMessage(
                     id = doc.id,
                     sender = doc.data["senderName"] as? String ?: "Usuario",
-                    message = doc.data["text"] as? String ?: "",
+                    message = text,
                     time = sdf.format(Date(ts.toLong())),
-                    isMe = senderId == currentUserId
+                    isMe = senderId == currentUserId,
+                    imageUri = finalImageUrl,
+                    isLocation = isLocation
                 ))
             }
             if (chatMessages.isNotEmpty()) {
@@ -147,13 +178,24 @@ fun GroupsScreen(navController: NavController) {
                     if (senderId != currentUserId) {
                         val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
                         val ts = (payload["timestamp"] as? Number)?.toLong() ?: System.currentTimeMillis()
+                        val rawImageUrl = payload["imageUrl"] as? String
+                        val finalImageUrl = if (!rawImageUrl.isNullOrEmpty()) {
+                            appwrite.getImageUrl(rawImageUrl, AppwriteManager.BUCKET_GROUPS_ID)
+                        } else null
                         
+                        val text = payload["text"] as? String ?: ""
+                        val isLocation = text.contains("google.com/maps") || 
+                                       text.contains("maps.app.goo.gl") || 
+                                       text.contains("waze.com")
+
                         val newMessage = ChatMessage(
                             id = payload["\$id"] as? String ?: UUID.randomUUID().toString(),
                             sender = payload["senderName"] as? String ?: "Usuario",
-                            message = payload["text"] as? String ?: "",
+                            message = text,
                             time = sdf.format(Date(ts)),
-                            isMe = false
+                            isMe = false,
+                            imageUri = finalImageUrl,
+                            isLocation = isLocation
                         )
                         
                         scope.launch {
@@ -204,8 +246,64 @@ fun GroupsScreen(navController: NavController) {
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri != null) {
-            chatMessages.add(ChatMessage("Yo", "", "Ahora", true, imageUri = uri.toString()))
-            scope.launch { listState.animateScrollToItem(chatMessages.size - 1) }
+            val groupId = selectedGroupId
+            val userId = currentUserId
+            if (groupId != null && userId != null) {
+                scope.launch {
+                    val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+                    // 1. Mostrar localmente de inmediato
+                    val tempMsg = ChatMessage(
+                        sender = currentUserName,
+                        message = "",
+                        time = sdf.format(Date()),
+                        isMe = true,
+                        imageUri = uri.toString(),
+                        status = MessageStatus.SENDING
+                    )
+                    chatMessages.add(tempMsg)
+                    listState.animateScrollToItem(chatMessages.size - 1)
+
+                    // 2. Subir imagen a Appwrite
+                    try {
+                        val inputStream = context.contentResolver.openInputStream(uri)
+                        val bytes = inputStream?.readBytes()
+                        if (bytes != null) {
+                            val fileId = appwrite.uploadImage(
+                                io.appwrite.models.InputFile.fromBytes(
+                                    bytes = bytes,
+                                    filename = "chat_${System.currentTimeMillis()}.jpg",
+                                    mimeType = "image/jpeg"
+                                )
+                            )
+                            
+                            // 3. Enviar mensaje con el ID de la imagen
+                            val success = appwrite.sendMessage(
+                                groupId = groupId,
+                                senderId = userId,
+                                senderName = currentUserName,
+                                text = "",
+                                imageUrl = fileId
+                            )
+                            
+                            // 4. Actualizar estado
+                            val index = chatMessages.indexOfFirst { it.id == tempMsg.id }
+                            if (index != -1) {
+                                if (success != null) {
+                                    chatMessages[index] = chatMessages[index].copy(
+                                        status = MessageStatus.SENT,
+                                        id = success
+                                    )
+                                } else {
+                                    chatMessages[index] = chatMessages[index].copy(status = MessageStatus.ERROR)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        val index = chatMessages.indexOfFirst { it.id == tempMsg.id }
+                        if (index != -1) chatMessages[index] = chatMessages[index].copy(status = MessageStatus.ERROR)
+                    }
+                }
+            }
         }
     }
 
@@ -216,6 +314,74 @@ fun GroupsScreen(navController: NavController) {
             chatMessages.add(ChatMessage("Yo", "", "Ahora", true, fileUri = uri.toString(), fileName = "Documento.pdf"))
             scope.launch { listState.animateScrollToItem(chatMessages.size - 1) }
         }
+    }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (granted) {
+            // Re-intentar enviar ubicacion si se desea
+        } else {
+            Toast.makeText(context, "Permiso de ubicación denegado", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun sendLocationMessage() {
+        val hasFineLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!hasFineLocation) {
+            locationPermissionLauncher.launch(arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ))
+            return
+        }
+
+        fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+            .addOnSuccessListener { location ->
+                if (location != null) {
+                    val mapsLink = "https://www.google.com/maps/search/?api=1&query=${location.latitude},${location.longitude}"
+                    val groupId = selectedGroupId
+                    val userId = currentUserId
+                    if (groupId != null && userId != null) {
+                        scope.launch {
+                            val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+                            val tempMsg = ChatMessage(
+                                sender = currentUserName,
+                                message = mapsLink,
+                                time = sdf.format(Date()),
+                                isMe = true,
+                                isLocation = true,
+                                status = MessageStatus.SENDING
+                            )
+                            chatMessages.add(tempMsg)
+                            listState.animateScrollToItem(chatMessages.size - 1)
+
+                            val success = appwrite.sendMessage(
+                                groupId = groupId,
+                                senderId = userId,
+                                senderName = currentUserName,
+                                text = mapsLink
+                            )
+
+                            val index = chatMessages.indexOfFirst { it.id == tempMsg.id }
+                            if (index != -1) {
+                                if (success != null) {
+                                    chatMessages[index] = chatMessages[index].copy(
+                                        status = MessageStatus.SENT,
+                                        id = success
+                                    )
+                                } else {
+                                    chatMessages[index] = chatMessages[index].copy(status = MessageStatus.ERROR)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Toast.makeText(context, "No se pudo obtener la ubicación", Toast.LENGTH_SHORT).show()
+                }
+            }
     }
 
     if (showCreateDialog) {
@@ -302,6 +468,42 @@ fun GroupsScreen(navController: NavController) {
         )
     }
 
+    if (showDeleteConfirmDialog && selectedGroup != null) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmDialog = false },
+            title = { Text("¿Eliminar Grupo?") },
+            text = { Text("Esta acción es irreversible. Se eliminarán todos los mensajes y archivos asociados al grupo.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            val success = appwrite.deleteGroup(selectedGroupId!!)
+                            if (success) {
+                                val remoteGroups = appwrite.getGroups()
+                                allGroups.clear()
+                                allGroups.addAll(remoteGroups)
+                                selectedGroupId = null
+                                isExploring = true
+                                Toast.makeText(context, "Grupo eliminado", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "Error al eliminar el grupo", Toast.LENGTH_SHORT).show()
+                            }
+                            showDeleteConfirmDialog = false
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                ) {
+                    Text("Eliminar", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -343,6 +545,14 @@ fun GroupsScreen(navController: NavController) {
                                         navController.navigate(Screen.GroupSettings.createRoute(selectedGroupId!!))
                                     },
                                     leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Eliminar Grupo", color = Color.Red) },
+                                    onClick = {
+                                        showMenu = false
+                                        showDeleteConfirmDialog = true
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Color.Red) }
                                 )
                             }
                             DropdownMenuItem(
@@ -479,12 +689,17 @@ fun GroupsScreen(navController: NavController) {
                                 messageText = ""
                                 val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
                                 
+                                val isLocation = textToSend.contains("google.com/maps") || 
+                                               textToSend.contains("maps.app.goo.gl") || 
+                                               textToSend.contains("waze.com")
+
                                 // 1. Crear mensaje temporal con estado SENDING
                                 val tempMsg = ChatMessage(
                                     sender = currentUserName,
                                     message = textToSend,
                                     time = sdf.format(Date()),
                                     isMe = true,
+                                    isLocation = isLocation,
                                     status = MessageStatus.SENDING
                                 )
                                 chatMessages.add(tempMsg)
@@ -517,7 +732,8 @@ fun GroupsScreen(navController: NavController) {
                             }
                         },
                         onImageAttach = { imagePicker.launch("image/*") },
-                        onFileAttach = { filePicker.launch("*/*") }
+                        onFileAttach = { filePicker.launch("*/*") },
+                        onLocationAttach = { sendLocationMessage() }
                     )
                 }
             }
@@ -622,7 +838,8 @@ fun ChatContent(
     onMessageChange: (String) -> Unit,
     onSend: () -> Unit,
     onImageAttach: () -> Unit,
-    onFileAttach: () -> Unit
+    onFileAttach: () -> Unit,
+    onLocationAttach: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
@@ -663,6 +880,14 @@ fun ChatContent(
                                 onFileAttach()
                             },
                             leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Ubicación") },
+                            onClick = {
+                                showAttachMenu = false
+                                onLocationAttach()
+                            },
+                            leadingIcon = { Icon(Icons.Default.LocationOn, contentDescription = null) }
                         )
                     }
                 }
@@ -803,7 +1028,29 @@ fun ChatBubble(msg: ChatMessage) {
                 }
 
                 if (msg.message.isNotBlank()) {
-                    Text(text = msg.message, color = textColor)
+                    if (msg.isLocation) {
+                        val context = LocalContext.current
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color.Black.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                                .clickable {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(msg.message))
+                                    context.startActivity(intent)
+                                }
+                                .padding(8.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Map, contentDescription = null, tint = textColor, modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Ubicación compartida", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = textColor)
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("Toca para ver en el mapa", style = MaterialTheme.typography.labelSmall, color = textColor.copy(alpha = 0.7f))
+                        }
+                    } else {
+                        Text(text = msg.message, color = textColor)
+                    }
                 }
                 
                 Row(

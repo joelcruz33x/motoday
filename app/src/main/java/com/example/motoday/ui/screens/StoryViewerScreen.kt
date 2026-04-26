@@ -23,6 +23,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun StoryViewerScreen(
     stories: List<Document<Map<String, Any>>>,
+    onStoryViewed: (String) -> Unit = {},
     onClose: () -> Unit
 ) {
     var currentIndex by remember { mutableStateOf(0) }
@@ -54,6 +55,10 @@ fun StoryViewerScreen(
                 onClose()
             }
         }
+    }
+
+    LaunchedEffect(currentIndex) {
+        currentStory?.id?.let { onStoryViewed(it) }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {

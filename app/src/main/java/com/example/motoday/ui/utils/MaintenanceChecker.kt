@@ -15,7 +15,7 @@ class MaintenanceChecker(val context: Context) {
         val currentKm = user.totalKilometers
         
         // 1. Revisar Aceite (Intervalo 3000km)
-        val lastOilKm = logs.filter { it.type == "Aceite" }.maxByOrNull { it.mileage }?.mileage ?: 0
+        val lastOilKm = logs.filter { it.type == "Aceite" }.maxByOrNull { it.date }?.mileage ?: 0
         val oilRemaining = (lastOilKm + 3000) - currentKm
         
         if (oilRemaining <= 0) {
@@ -30,14 +30,14 @@ class MaintenanceChecker(val context: Context) {
             )
         }
 
-        // 2. Revisar Llantas (Intervalo 15000km)
-        val lastTiresKm = logs.filter { it.type == "Llantas" }.maxByOrNull { it.mileage }?.mileage ?: 0
-        val tiresRemaining = (lastTiresKm + 15000) - currentKm
+        // 2. Revisar Llantas (Intervalo 12000km)
+        val lastTiresKm = logs.filter { it.type == "Llantas" }.maxByOrNull { it.date }?.mileage ?: 0
+        val tiresRemaining = (lastTiresKm + 12000) - currentKm
         
         if (tiresRemaining <= 0) {
             notifier.showMaintenanceAlert(
                 "Revisión de Llantas", 
-                "Has superado el límite de 15,000 km. ¡Revisa el grabado de tus neumáticos!"
+                "Has superado el límite de 12,000 km. ¡Revisa el grabado de tus neumáticos!"
             )
         }
     }

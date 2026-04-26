@@ -6,7 +6,6 @@ sealed class Screen(val route: String) {
     object Login : Screen("login")
     object Register : Screen("register")
     object Explore : Screen("explore")
-    object Groups : Screen("groups")
     object Profile : Screen("profile")
     
     // Sub-screens or modal screens
@@ -17,6 +16,10 @@ sealed class Screen(val route: String) {
     object CreatePost : Screen("create_post")
     object Maintenance : Screen("maintenance")
     object Settings : Screen("settings")
+    object Store : Screen("store")
+    object Groups : Screen("groups?sharedText={sharedText}") {
+        fun createRoute(sharedText: String? = null) = if (sharedText != null) "groups?sharedText=$sharedText" else "groups"
+    }
     object GroupSettings : Screen("group_settings/{groupId}") {
         fun createRoute(groupId: String) = "group_settings/$groupId"
     }

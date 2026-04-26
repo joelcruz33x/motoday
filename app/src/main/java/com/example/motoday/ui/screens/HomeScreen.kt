@@ -37,6 +37,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import coil.imageLoader
 import com.example.motoday.data.local.AppDatabase
 import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.data.remote.AuthManager
@@ -97,6 +99,19 @@ fun HomeScreen(navController: NavController) {
         loadData()
     }
 
+    val storyLoader = context.imageLoader
+    LaunchedEffect(activeStories) {
+        activeStories.forEach { story ->
+            val url = story.data["imageUrl"] as? String
+            if (!url.isNullOrBlank()) {
+                val request = ImageRequest.Builder(context)
+                    .data(url)
+                    .build()
+                storyLoader.enqueue(request)
+            }
+        }
+    }
+
     val storyLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia(),
         onResult = { uris ->
@@ -150,6 +165,9 @@ fun HomeScreen(navController: NavController) {
             CenterAlignedTopAppBar(
                 title = { Text("MotoDay", fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp) },
                 actions = {
+                    IconButton(onClick = { navController.navigate(Screen.Store.route) }) {
+                        Icon(Icons.Default.ShoppingCart, contentDescription = "Tienda", tint = MaterialTheme.colorScheme.primary)
+                    }
                     IconButton(onClick = { navController.navigate(Screen.SOS.route) }) {
                         Icon(Icons.Default.Warning, contentDescription = "SOS", tint = Color(0xFFD32F2F), modifier = Modifier.size(28.dp))
                     }
@@ -186,9 +204,6 @@ fun HomeScreen(navController: NavController) {
                             onAddStoryClick = { storyLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                             onSeeStoriesClick = { stories -> 
                                 selectedUserStories = stories
-                                scope.launch {
-                                    stories.forEach { db.seenStoryDao().markAsSeen(com.example.motoday.data.local.entities.SeenStoryEntity(it.id)) }
-                                }
                             },
                             isUploading = isUploadingStory,
                             seenStoryIds = seenStoryIds
@@ -254,6 +269,11 @@ fun HomeScreen(navController: NavController) {
             selectedUserStories?.let { stories ->
                 StoryViewerScreen(
                     stories = stories,
+                    onStoryViewed = { storyId ->
+                        scope.launch {
+                            db.seenStoryDao().markAsSeen(com.example.motoday.data.local.entities.SeenStoryEntity(storyId))
+                        }
+                    },
                     onClose = { selectedUserStories = null }
                 )
             }
@@ -321,13 +341,16 @@ fun StoryCircle(
     onAddClick: () -> Unit,
     onSeeClick: () -> Unit
 ) {
-    // Animación para el borde si tiene historias no vistas
+    // Animación para el borde si tiene historias no vistas (Naranja MotoDay)
     val infiniteTransition = rememberInfiniteTransition(label = "borderTransition")
+    val motoDayOrange = Color(0xFFFF9800)
+    val motoDayOrangeLight = Color(0xFFFFB74D)
+
     val borderColor by infiniteTransition.animateColor(
-        initialValue = Color(0xFF6200EE),
-        targetValue = Color(0xFFBB86FC),
+        initialValue = motoDayOrange,
+        targetValue = motoDayOrangeLight,
         animationSpec = infiniteRepeatable(
-            animation = tween<Color>(1500, easing = LinearEasing),
+            animation = tween<Color>(1000, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "borderColor"
@@ -343,8 +366,8 @@ fun StoryCircle(
                 modifier = Modifier
                     .size(70.dp)
                     .border(
-                        width = 2.5.dp, 
-                        color = if (hasUnseenStories) borderColor else if (hasStories) Color.LightGray else Color.LightGray.copy(alpha = 0.5f),
+                        width = if (hasUnseenStories) 3.dp else 1.dp, 
+                        color = if (hasUnseenStories) borderColor else if (hasStories) Color.LightGray else Color.Transparent,
                         shape = CircleShape
                     )
                     .padding(4.dp)

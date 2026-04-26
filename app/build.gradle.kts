@@ -76,6 +76,9 @@ dependencies {
 
     // Appwrite
     implementation(libs.appwrite)
+
+    // WorkManager
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
     
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

@@ -53,7 +53,7 @@ import java.util.*
 import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.data.remote.AuthManager
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ProfileScreen(navController: NavController) {
     val context = LocalContext.current
@@ -137,31 +137,45 @@ fun ProfileScreen(navController: NavController) {
                 val type = object : com.google.gson.reflect.TypeToken<Map<String, String>>() {}.type
                 var foundRole: String? = null
                 var foundGroupName: String = "Independiente"
+                var foundGroupPhoto: String? = null
+                var userFoundInAnyGroup = false
                 
                 for (doc in allGroups) {
-                    val rolesMap: Map<String, String> = gson.fromJson(doc.data["roles"] as? String ?: "{}", type) ?: emptyMap()
-                    if (rolesMap.containsKey(userId)) {
-                        foundRole = rolesMap[userId]
+                    val members = (doc.data["members"] as? List<*>)?.map { it.toString() } ?: emptyList()
+                    if (members.contains(userId)) {
+                        userFoundInAnyGroup = true
+                        val rolesMap: Map<String, String> = gson.fromJson(doc.data["roles"] as? String ?: "{}", type) ?: emptyMap()
+                        foundRole = rolesMap[userId] // null significa Miembro
                         foundGroupName = doc.data["name"] as? String ?: "Grupo"
                         val groupPhoto = doc.data["photoUrl"] as? String
-                        val fullGroupPhotoUrl = if (!groupPhoto.isNullOrBlank()) {
+                        foundGroupPhoto = if (!groupPhoto.isNullOrBlank()) {
                             appwrite.getImageUrl(groupPhoto, AppwriteManager.BUCKET_GROUPS_ID)
                         } else null
-
-                        // Actualizar la base de datos local con toda la info del grupo
-                        val currentLocal = db.userDao().getUserProfileOnce()
-                        if (currentLocal != null) {
-                            if (currentLocal.clubRole != foundRole || 
-                                currentLocal.clubName != foundGroupName || 
-                                currentLocal.groupPhotoUri != fullGroupPhotoUrl) {
-                                db.userDao().insertOrUpdate(currentLocal.copy(
-                                    clubRole = foundRole,
-                                    clubName = foundGroupName,
-                                    groupPhotoUri = fullGroupPhotoUrl
-                                ))
-                            }
-                        }
                         break
+                    }
+                }
+
+                val currentLocal = db.userDao().getUserProfileOnce()
+                if (currentLocal != null) {
+                    if (userFoundInAnyGroup) {
+                        if (currentLocal.clubRole != foundRole || 
+                            currentLocal.clubName != foundGroupName || 
+                            currentLocal.groupPhotoUri != foundGroupPhoto) {
+                            db.userDao().insertOrUpdate(currentLocal.copy(
+                                clubRole = foundRole,
+                                clubName = foundGroupName,
+                                groupPhotoUri = foundGroupPhoto
+                            ))
+                        }
+                    } else {
+                        // El usuario no está en ningún grupo, resetear a Independiente localmente
+                        if (currentLocal.clubName != "Independiente" || currentLocal.clubRole != null) {
+                            db.userDao().insertOrUpdate(currentLocal.copy(
+                                clubRole = null,
+                                clubName = "Independiente",
+                                groupPhotoUri = null
+                            ))
+                        }
                     }
                 }
             } catch (e: Exception) { Log.e("ProfileScreen", "Error roles: ${e.message}") }
@@ -302,8 +316,8 @@ fun ProfileScreen(navController: NavController) {
                     }
                 } else {
                     val currentRoleInfo = remember(user.clubRole, user.clubName, user.groupPhotoUri) {
-                        if (!user.clubRole.isNullOrBlank() && user.clubRole != "null" && user.clubName != "Independiente") {
-                            Triple(user.clubRole, user.clubName, user.groupPhotoUri)
+                        if (user.clubName != "Independiente" && user.clubName.isNotBlank()) {
+                            Triple(user.clubRole ?: "Miembro", user.clubName, user.groupPhotoUri)
                         } else null
                     }
 
@@ -369,12 +383,23 @@ fun ProfileScreen(navController: NavController) {
                         }
                     })
 
-                    TabRow(selectedTabIndex = selectedTab) {
+                    ScrollableTabRow(
+                        selectedTabIndex = selectedTab,
+                        edgePadding = 16.dp,
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        divider = {}
+                    ) {
                         tabs.forEachIndexed { index, title ->
                             Tab(
                                 selected = selectedTab == index,
                                 onClick = { selectedTab = index },
-                                text = { Text(title) }
+                                text = { 
+                                    Text(
+                                        text = title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        maxLines = 1
+                                    ) 
+                                }
                             )
                         }
                     }
@@ -534,6 +559,7 @@ fun EditProfileForm(user: UserEntity, onSave: (UserEntity) -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ProfileHeader(
     user: UserEntity,
@@ -598,125 +624,127 @@ fun ProfileHeader(
                 }
             }
             Spacer(modifier = Modifier.width(16.dp))
-            Column {
-                Text(text = user.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = user.name, 
+                    style = MaterialTheme.typography.titleLarge, 
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = "Nivel: ${user.level}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
+                    Text(
+                        text = "Nivel: ${user.level}", 
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary, 
+                        fontWeight = FontWeight.Medium
+                    )
                     if (roleInfo == null && !user.isIndependent && user.clubName.isNotBlank() && user.clubName != "Independiente") {
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(text = "• ${user.clubName}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        Text(
+                            text = "• ${user.clubName}", 
+                            style = MaterialTheme.typography.bodySmall, 
+                            color = Color.Gray,
+                            maxLines = 1
+                        )
                     }
                 }
             }
         }
 
-        if (roleInfo != null) {
-            val (role, groupName, groupPhoto) = roleInfo
-            val rankStyle = when (role) {
-                "Presidente" -> Triple(Color(0xFFFFD700), Icons.Default.MilitaryTech, "Líder de Club")
-                "Vicepresidente" -> Triple(Color(0xFFC0C0C0), Icons.Default.Star, "Mando Directivo")
-                "Sargento de Armas" -> Triple(Color(0xFFB22222), Icons.Default.Security, "Disciplina")
-                "Secretario" -> Triple(Color(0xFF4682B4), Icons.Default.Description, "Administración")
-                "Tesorero" -> Triple(Color(0xFF2E8B57), Icons.Default.MonetizationOn, "Finanzas")
-                "Capitán de Ruta" -> Triple(Color(0xFFFF8C00), Icons.Default.Map, "Navegación")
-                "Prospecto" -> Triple(Color(0xFF808080), Icons.Default.NewReleases, "En Prueba")
-                else -> Triple(MaterialTheme.colorScheme.primary, Icons.Default.Shield, "Miembro")
-            }
+        Spacer(modifier = Modifier.height(12.dp))
 
-            Spacer(modifier = Modifier.height(12.dp))
-            
-            Surface(
-                color = rankStyle.first.copy(alpha = 0.15f),
-                shape = RoundedCornerShape(12.dp),
-                border = androidx.compose.foundation.BorderStroke(2.dp, rankStyle.first),
-                modifier = Modifier.padding(top = 4.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (roleInfo != null) {
+                val (role, groupName, groupPhoto) = roleInfo
+                val rankStyle = when (role) {
+                    "Presidente" -> Triple(Color(0xFFFFD700), Icons.Default.MilitaryTech, "Líder de Club")
+                    "Vicepresidente" -> Triple(Color(0xFFC0C0C0), Icons.Default.Star, "Mando Directivo")
+                    "Sargento de Armas" -> Triple(Color(0xFFB22222), Icons.Default.Security, "Disciplina")
+                    "Secretario" -> Triple(Color(0xFF4682B4), Icons.Default.Description, "Administración")
+                    "Tesorero" -> Triple(Color(0xFF2E8B57), Icons.Default.MonetizationOn, "Finanzas")
+                    "Capitán de Ruta" -> Triple(Color(0xFFFF8C00), Icons.Default.Map, "Navegación")
+                    "Prospecto" -> Triple(Color(0xFF808080), Icons.Default.NewReleases, "En Prueba")
+                    else -> Triple(MaterialTheme.colorScheme.primary, Icons.Default.Shield, "Miembro")
+                }
+
+                Surface(
+                    color = rankStyle.first.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(2.dp, rankStyle.first),
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(if (groupPhoto == null) rankStyle.first else Color.Transparent),
-                        contentAlignment = Alignment.Center
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (groupPhoto != null) {
-                            AsyncImage(
-                                model = groupPhoto,
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                        } else {
-                            Icon(
-                                rankStyle.second,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = role.uppercase(),
-                                style = MaterialTheme.typography.labelLarge,
-                                color = rankStyle.first,
-                                fontWeight = FontWeight.ExtraBold,
-                                letterSpacing = 1.sp
-                            )
-                            if (rankStyle.third != "Miembro") {
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "• ${rankStyle.third}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.Gray
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(if (groupPhoto == null) rankStyle.first else Color.Transparent),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (groupPhoto != null) {
+                                AsyncImage(
+                                    model = groupPhoto,
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                Icon(
+                                    rankStyle.second,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
                                 )
                             }
                         }
-                        Text(
-                            text = groupName,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = role.uppercase(),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = rankStyle.first,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    letterSpacing = 1.sp
+                                )
+                                if (rankStyle.third != "Miembro") {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "• ${rankStyle.third}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.Gray
+                                    )
+                                }
+                            }
+                            Text(
+                                text = groupName,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }
-        }
 
-        if (user.isIndependent) {
-            // Estilo para el Motero Independiente (Aparece siempre que el toggle esté activo)
-            Spacer(modifier = Modifier.height(8.dp))
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                shape = RoundedCornerShape(12.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color.Gray.copy(alpha = 0.3f)),
-                modifier = Modifier.padding(top = 4.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            if (user.isIndependent) {
+                // Estilo para el Motero Independiente (Aparece siempre que el toggle esté activo)
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.Gray.copy(alpha = 0.3f)),
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .background(Color.DarkGray, CircleShape),
-                        contentAlignment = Alignment.Center
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            Icons.Default.PersonOutline,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
                         Text(
-                            text = "MOTERO INDEPENDIENTE",
+                            text = "INDEPENDIENTE",
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.ExtraBold,
