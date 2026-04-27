@@ -184,16 +184,19 @@ fun ProfileScreen(navController: NavController) {
             try {
                 val remoteDocuments = appwrite.getUserStamps(userId)
                 if (remoteDocuments.isNotEmpty()) {
-                    val localStamps = remoteDocuments.map { doc ->
+                            val localStamps = remoteDocuments.map { doc ->
                         com.example.motoday.data.local.entities.PassportStampEntity(
-                            rideId = (doc.data["rideId"] as? Number)?.toInt() ?: 0,
+                            id = 0, // Dejar que Room asigne ID si es nuevo
+                            rideRemoteId = doc.data["rideRemoteId"] as? String ?: (doc.data["rideId"] as? String ?: ""),
                             rideTitle = doc.data["rideTitle"] as? String ?: "Viaje",
                             locationName = doc.data["locationName"] as? String ?: "Desconocido",
                             iconResName = doc.data["iconResName"] as? String ?: "ic_stamp_default",
                             date = (doc.data["date"] as? Number)?.toLong() ?: System.currentTimeMillis()
                         )
                     }
+                    // Usar insertStamps que debería manejar conflictos o simplemente añadir los nuevos
                     db.passportDao().insertStamps(localStamps)
+                    Log.d("ProfileScreen", "Sincronizados ${localStamps.size} sellos desde Appwrite")
                 }
             } catch (e: Exception) { Log.e("ProfileScreen", "Error sellos: ${e.message}") }
 
@@ -251,7 +254,36 @@ fun ProfileScreen(navController: NavController) {
                         }
                     }
                 }
-            } catch (e: Exception) { Log.e("ProfileScreen", "Error garaje: ${e.message}") }
+            } catch (e: Exception) {
+                Log.e("ProfileScreen", "Error garaje: ${e.message}")
+            }
+
+            // 4. Catch-up de Rutas Finalizadas (Para asistentes que no tenían la pantalla abierta)
+            try {
+                val completedRides = appwrite.getAllRemoteRides().filter { doc ->
+                    val status = doc.data["status"] as? String
+                    val participants = (doc.data["participantIds"] as? List<*>)?.map { it.toString() } ?: emptyList()
+                    status == "COMPLETED" && participants.contains(userId)
+                }
+
+                completedRides.forEach { doc ->
+                    val remoteId = doc.id
+
+                    val localRide = db.rideDao().getRideByRemoteId(remoteId)
+                    if (localRide != null) {
+                        val rideRemoteId = localRide.remoteId ?: ""
+                        if (rideRemoteId.isNotBlank()) {
+                            val alreadyHasStamp = db.passportDao().hasStampForRide(rideRemoteId) > 0
+                            if (!alreadyHasStamp) {
+                                Log.d("ProfileScreen", "Ejecutando catch-up para ruta finalizada: ${localRide.title}")
+                                appwrite.processRideCompletion(context, db, localRide, userId)
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("ProfileScreen", "Error en catch-up de rutas: ${e.message}")
+            }
         } else {
             if (db.userDao().getUserProfileOnce() == null) {
                 db.userDao().insertOrUpdate(UserEntity(id = 1, name = "Invitado", level = "Novato", bikeModel = "Sin moto", bikeSpecs = "", bikeYear = "", bikeColor = ""))
@@ -1389,8 +1421,10 @@ fun PassportSection() {
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(bottom = 32.dp)
             ) {
                 items(uniqueStamps) { stamp ->
                     CityStamp(stamp)
@@ -1420,22 +1454,32 @@ fun CityStamp(stamp: com.example.motoday.data.local.entities.PassportStampEntity
         label = "rotation"
     )
 
-    val stampConfig = when (stamp.iconResName) {
-        "ic_stamp_machala" -> StampStyle(Color(0xFFFFD700), Icons.Default.Agriculture, "MACHALA") 
-        "ic_stamp_guayaquil" -> StampStyle(Color(0xFF00BFFF), Icons.Default.Anchor, "GUAYAQUIL") 
-        "ic_stamp_cuenca" -> StampStyle(Color(0xFF8B4513), Icons.Default.Architecture, "CUENCA") 
-        "ic_stamp_quito" -> StampStyle(Color(0xFFD32F2F), Icons.Default.AccountBalance, "QUITO") 
-        else -> StampStyle(Color(0xFF6200EE), Icons.Default.LocationCity, stamp.locationName.uppercase())
+    val stampConfig = when (stamp.locationName.lowercase(Locale.getDefault()).trim()) {
+        "machala" -> StampStyle(Color(0xFFFFD700), Icons.Default.Agriculture, "MACHALA") 
+        "guayaquil" -> StampStyle(Color(0xFF00BFFF), Icons.Default.Anchor, "GUAYAQUIL") 
+        "cuenca" -> StampStyle(Color(0xFF8B4513), Icons.Default.Architecture, "CUENCA") 
+        "quito" -> StampStyle(Color(0xFFD32F2F), Icons.Default.AccountBalance, "QUITO") 
+        "loja" -> StampStyle(Color(0xFF4CAF50), Icons.Default.Park, "LOJA")
+        "manta" -> StampStyle(Color(0xFF009688), Icons.Default.DirectionsBoat, "MANTA")
+        "ambato" -> StampStyle(Color(0xFFFF5722), Icons.Default.LocalFlorist, "AMBATO")
+        else -> StampStyle(
+            color = Color(0xFF6200EE), 
+            icon = Icons.Default.LocationCity, 
+            label = stamp.locationName.uppercase(Locale.getDefault())
+        )
     }
 
     LaunchedEffect(Unit) {
         isVisible = true
     }
 
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(
+        modifier = Modifier.padding(4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
         Box(
             modifier = Modifier
-                .size(95.dp)
+                .size(85.dp)
                 .graphicsLayer(
                     scaleX = scale,
                     scaleY = scale,
@@ -1552,7 +1596,7 @@ fun StatsSection(user: UserEntity) {
                 val distance = if (user.useMiles) (user.totalKilometers * 0.621371).toInt() else user.totalKilometers
                 Box(modifier = Modifier.weight(1f)) { StatCard(unit, "$distance", Icons.Default.Place, MaterialTheme.colorScheme.primary) }
                 
-                val completedRidesCount = rides.count { it.status == "COMPLETED" }
+                val completedRidesCount = user.ridesCompleted
                 Box(modifier = Modifier.weight(1f)) { StatCard("Rutas", "$completedRidesCount", Icons.Default.CheckCircle, Color(0xFF4CAF50)) }
             }
         }
@@ -1563,8 +1607,8 @@ fun StatsSection(user: UserEntity) {
             Spacer(modifier = Modifier.height(8.dp))
         }
 
-        items(stamps.distinctBy { it.rideId }.size) { index ->
-            val stamp = stamps.distinctBy { it.rideId }[index]
+        items(stamps.distinctBy { it.rideRemoteId }.size) { index ->
+            val stamp = stamps.distinctBy { it.rideRemoteId }[index]
             val sdf = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
             Card(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),

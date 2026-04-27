@@ -18,6 +18,14 @@ interface WeatherApiService {
         @Query("lang") lang: String = "es"
     ): WeatherResponse
 
+    @GET("weather")
+    suspend fun getWeatherByCity(
+        @Query("q") cityName: String,
+        @Query("appid") apiKey: String,
+        @Query("units") units: String = "metric",
+        @Query("lang") lang: String = "es"
+    ): WeatherResponse
+
     companion object {
         private const val BASE_URL = "https://api.openweathermap.org/data/2.5/"
 

@@ -298,7 +298,9 @@ fun CreateRideScreen(navController: NavController) {
                             creatorName = creatorName,
                             isAttending = true,
                             participantsCount = 1,
-                            isSynced = remoteId != null
+                            isSynced = remoteId != null,
+                            remoteId = remoteId,
+                            creatorId = userId
                         )
                         db.rideDao().insertRide(newRide)
                         

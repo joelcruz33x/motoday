@@ -13,6 +13,13 @@ import io.appwrite.services.Account
 import io.appwrite.services.Databases
 import io.appwrite.services.Storage
 import java.util.UUID
+import android.location.Geocoder
+import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.example.motoday.data.local.AppDatabase
+import com.example.motoday.data.local.entities.RideEntity
+import com.example.motoday.data.local.entities.PassportStampEntity
 
 class AppwriteManager(context: Context) {
     val client = Client(context)
@@ -45,8 +52,8 @@ class AppwriteManager(context: Context) {
 
         // Para compatibilidad con el código existente que usaba estas constantes:
         const val COLLECTION_PROFILES_ID = COLLECTION_USERS_ID 
-        const val COLLECTION_MESSAGES_ID = "messages" // No proporcionado, mantenemos el anterior o lo buscamos
-        const val COLLECTION_STAMPS_ID = "stamps"     // No proporcionado
+        const val COLLECTION_MESSAGES_ID = "messages" 
+        const val COLLECTION_STAMPS_ID = "passport_stamps"
 
         @Volatile
         private var INSTANCE: AppwriteManager? = null
@@ -125,7 +132,7 @@ class AppwriteManager(context: Context) {
     suspend fun syncStamp(userId: String, stamp: com.example.motoday.data.local.entities.PassportStampEntity): Boolean {
         return syncStamp(
             userId = userId,
-            rideId = stamp.rideId,
+            rideRemoteId = stamp.rideRemoteId,
             rideTitle = stamp.rideTitle,
             locationName = stamp.locationName,
             iconResName = stamp.iconResName,
@@ -135,7 +142,7 @@ class AppwriteManager(context: Context) {
 
     suspend fun syncStamp(
         userId: String,
-        rideId: Int,
+        rideRemoteId: String,
         rideTitle: String,
         locationName: String,
         iconResName: String,
@@ -144,7 +151,7 @@ class AppwriteManager(context: Context) {
         return try {
             val data = mapOf(
                 "userId" to userId,
-                "rideId" to rideId,
+                "rideId" to rideRemoteId, // En Appwrite lo guardamos como String
                 "rideTitle" to rideTitle,
                 "locationName" to locationName,
                 "iconResName" to iconResName,
@@ -750,6 +757,107 @@ class AppwriteManager(context: Context) {
         }
     }
 
+    // --- PROCESO GLOBAL DE FINALIZACIÓN DE RUTA ---
+    suspend fun processRideCompletion(
+        context: Context,
+        db: AppDatabase,
+        ride: RideEntity,
+        userId: String
+    ): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                // 1. Calcular Distancia
+                val distanceKm = if (ride.startLat != 0.0 && ride.endLat != 0.0) {
+                    val r = 6371
+                    val dLat = Math.toRadians(ride.endLat - ride.startLat)
+                    val dLon = Math.toRadians(ride.endLng - ride.startLng)
+                    val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                            Math.cos(Math.toRadians(ride.startLat)) * Math.cos(Math.toRadians(ride.endLat)) *
+                            Math.sin(dLon / 2) * Math.sin(dLon / 2)
+                    val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+                    val dist = (r * c).toInt()
+                    if (dist <= 0) 50 else dist
+                } else 50
+
+                // 2. Actualizar Perfil Local y Nube
+                val currentProfile = db.userDao().getUserProfileOnce()
+                if (currentProfile != null) {
+                    val newRides = currentProfile.ridesCompleted + 1
+                    val newKm = currentProfile.totalKilometers + distanceKm
+
+                    db.userDao().insertOrUpdate(currentProfile.copy(
+                        ridesCompleted = newRides,
+                        totalKilometers = newKm
+                    ))
+
+                    updateUserProfile(
+                        userId = userId,
+                        name = currentProfile.name,
+                        level = currentProfile.level,
+                        bikeModel = currentProfile.bikeModel,
+                        bikeSpecs = currentProfile.bikeSpecs,
+                        bikeYear = currentProfile.bikeYear,
+                        bikeColor = currentProfile.bikeColor,
+                        totalKm = newKm,
+                        rides = newRides,
+                        isIndependent = currentProfile.isIndependent
+                    )
+                }
+
+                // 3. Crear Sello si no existe
+                val remoteId = ride.remoteId ?: ""
+                if (remoteId.isBlank()) {
+                    Log.e("AppwriteManager", "No se puede crear sello: la ruta no tiene remoteId")
+                    return@withContext false
+                }
+
+                val alreadyHasStamp = db.passportDao().hasStampForRide(remoteId) > 0
+                if (!alreadyHasStamp) {
+                    var location = ride.endLocation.trim()
+                    val placeholders = listOf("ciudad/punto de destino", "ubicación en mapa", "desconocido")
+
+                    // Geocodificación si la ubicación es genérica o está vacía
+                    if (location.isBlank() || placeholders.any { location.lowercase().contains(it) }) {
+                        if (ride.endLat != 0.0 && ride.endLng != 0.0) {
+                            try {
+                                val geocoder = Geocoder(context, Locale.getDefault())
+                                // Usamos la versión de compatibilidad para evitar bloqueos
+                                val addresses = @Suppress("DEPRECATION") geocoder.getFromLocation(ride.endLat, ride.endLng, 1)
+                                if (!addresses.isNullOrEmpty()) {
+                                    location = addresses[0].locality 
+                                        ?: addresses[0].subAdminArea 
+                                        ?: addresses[0].adminArea 
+                                        ?: location // Si falla geocoder, mantenemos lo que había
+                                }
+                            } catch (e: Exception) {
+                                Log.e("AppwriteManager", "Error Geocoding: ${e.message}")
+                            }
+                        }
+                    }
+
+                    // Fallbacks de nombre si después de geocoder sigue siendo inválido
+                    if (location.isBlank() || placeholders.any { location.lowercase().contains(it) }) {
+                        location = if (ride.title.isNotBlank()) ride.title else "Ruta Finalizada"
+                    }
+
+                    val newStamp = PassportStampEntity(
+                        rideRemoteId = remoteId,
+                        rideTitle = ride.title,
+                        date = System.currentTimeMillis(),
+                        locationName = location
+                    )
+
+                    db.passportDao().insertStamp(newStamp)
+                    syncStamp(userId, newStamp)
+                }
+                true
+            } catch (e: Exception) {
+                Log.e("AppwriteManager", "Error processRideCompletion: ${e.message}")
+                false
+            }
+        }
+    }
+
     // --- RIDES ---
     suspend fun getAllRemoteRides(): List<Document<Map<String, Any>>> {
         return try {
@@ -770,7 +878,11 @@ class AppwriteManager(context: Context) {
                 databaseId = DATABASE_ID,
                 collectionId = COLLECTION_RIDES_ID,
                 documentId = io.appwrite.ID.unique(),
-                data = data
+                data = data,
+                permissions = listOf(
+                    io.appwrite.Permission.read(io.appwrite.Role.any()),
+                    io.appwrite.Permission.update(io.appwrite.Role.any())
+                )
             )
             response.id
         } catch (e: Exception) {
@@ -789,6 +901,52 @@ class AppwriteManager(context: Context) {
             )
             true
         } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun joinRemoteRide(rideId: String, userId: String): Boolean {
+        return try {
+            val doc = databases.getDocument(DATABASE_ID, COLLECTION_RIDES_ID, rideId)
+            val currentParticipants = (doc.data["participantIds"] as? List<*>)?.map { it.toString() }?.toMutableList() ?: mutableListOf()
+            
+            if (!currentParticipants.contains(userId)) {
+                currentParticipants.add(userId)
+                databases.updateDocument(
+                    DATABASE_ID,
+                    COLLECTION_RIDES_ID,
+                    rideId,
+                    mapOf(
+                        "participantIds" to currentParticipants
+                    )
+                )
+            }
+            true
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error joinRemoteRide: ${e.message}")
+            false
+        }
+    }
+
+    suspend fun leaveRemoteRide(rideId: String, userId: String): Boolean {
+        return try {
+            val doc = databases.getDocument(DATABASE_ID, COLLECTION_RIDES_ID, rideId)
+            val currentParticipants = (doc.data["participantIds"] as? List<*>)?.map { it.toString() }?.toMutableList() ?: mutableListOf()
+            
+            if (currentParticipants.contains(userId)) {
+                currentParticipants.remove(userId)
+                databases.updateDocument(
+                    DATABASE_ID,
+                    COLLECTION_RIDES_ID,
+                    rideId,
+                    mapOf(
+                        "participantIds" to currentParticipants
+                    )
+                )
+            }
+            true
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error leaveRemoteRide: ${e.message}")
             false
         }
     }

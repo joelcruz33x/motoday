@@ -24,5 +24,7 @@ data class RideEntity(
     val isSynced: Boolean = false,
     val difficulty: String = "Fácil", // Fácil, Intermedio, Difícil
     val terrainType: String = "Asfalto", // Asfalto, Mixto, Off-road
-    val completedAt: Long? = null // Timestamp de cuando se finalizó la ruta
+    val completedAt: Long? = null, // Timestamp de cuando se finalizó la ruta
+    val remoteId: String? = null, // ID del documento en Appwrite
+    val creatorId: String? = null // ID del usuario que creó la ruta en Appwrite
 )

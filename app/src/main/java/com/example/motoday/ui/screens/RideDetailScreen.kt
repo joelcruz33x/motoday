@@ -2,9 +2,10 @@ package com.example.motoday.ui.screens
 
 import android.content.Intent
 import android.net.Uri
-import android.location.Geocoder
+import androidx.core.net.toUri
 import android.util.Log
 import android.widget.Toast
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -27,45 +28,125 @@ import coil.compose.AsyncImage
 import com.example.motoday.data.local.AppDatabase
 import com.example.motoday.data.local.entities.PassportStampEntity
 import com.example.motoday.data.local.entities.RideEntity
-import com.example.motoday.data.local.entities.UserEntity
+import com.example.motoday.data.network.WeatherApiService
+import com.example.motoday.data.network.model.WeatherResponse
 import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.data.remote.AuthManager
-import com.example.motoday.ui.utils.NotificationHelper
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.firstOrNull
+import io.appwrite.services.Realtime
 import kotlinx.coroutines.launch
+import android.location.Geocoder
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.sin
-import kotlin.math.cos
-import kotlin.math.sqrt
-import kotlin.math.atan2
+import kotlin.math.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RideDetailScreen(navController: NavController, rideId: Int) {
     val context = LocalContext.current
     val db = AppDatabase.getDatabase(context)
-    val scope = rememberCoroutineScope()
     val appwrite = remember { AppwriteManager.getInstance(context) }
     val authManager = remember { AuthManager(context) }
-    val notificationHelper = remember { NotificationHelper(context) }
+    val scope = rememberCoroutineScope()
     
     var ride by remember { mutableStateOf<RideEntity?>(null) }
+    var currentUserId by remember { mutableStateOf<String?>(null) }
+    var weatherInfo by remember { mutableStateOf<WeatherResponse?>(null) }
+    val weatherApi = remember { WeatherApiService.create() }
+    val weatherApiKey = "519ca3ab947f8914a3366ac64cf291fc"
+    
+    // Suscripción Realtime para actualizaciones de participantes
+    val remoteId = ride?.remoteId
+    DisposableEffect(remoteId) {
+        if (remoteId == null) return@DisposableEffect onDispose {}
+
+        val realtime = Realtime(appwrite.client)
+        val subscription = realtime.subscribe(
+            "databases.${AppwriteManager.DATABASE_ID}.collections.${AppwriteManager.COLLECTION_RIDES_ID}.documents.$remoteId"
+        ) { event ->
+            val payload = event.payload as? Map<*, *>
+            if (payload != null) {
+                val participantIds = (payload["participantIds"] as? List<*>)?.map { it.toString() } ?: emptyList()
+                val newCount = participantIds.size
+                val remoteStatus = payload["status"]?.toString() ?: ""
+                Log.d("Realtime", "Evento recibido: status=$remoteStatus, participants=${participantIds.size}")
+                
+                scope.launch {
+                    val r = db.rideDao().getRideById(rideId)
+                    if (r != null) {
+                        val isAttendingNow = if (r.creatorId == currentUserId) true 
+                                            else (currentUserId?.let { participantIds.contains(it) } ?: r.isAttending)
+                        
+                        val correctedCount = if (r.creatorId != null && !participantIds.contains(r.creatorId)) {
+                            newCount + 1
+                        } else {
+                            newCount
+                        }
+
+                        val updatedStatus = if (remoteStatus.isNotBlank()) remoteStatus else r.status
+
+                        if (r.participantsCount != correctedCount || r.isAttending != isAttendingNow || r.status != updatedStatus) {
+                            Log.d("Realtime", "Aplicando cambios a Room: status $updatedStatus")
+                            
+                            // LÓGICA AUTOMÁTICA PARA ASISTENTES AL FINALIZAR
+                            if (updatedStatus == "COMPLETED" && r.status != "COMPLETED" && isAttendingNow) {
+                                // EVITAR DOBLE PROCESAMIENTO SI ES EL CREADOR
+                                if (r.creatorId != currentUserId) {
+                                    scope.launch {
+                                        appwrite.processRideCompletion(
+                                            context = context,
+                                            db = db,
+                                            ride = r,
+                                            userId = currentUserId ?: ""
+                                        )
+                                    }
+                                }
+                            }
+
+                            db.rideDao().updateRide(r.copy(
+                                participantsCount = correctedCount,
+                                isAttending = isAttendingNow,
+                                status = updatedStatus
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+        
+        onDispose {
+            subscription.close()
+        }
+    }
     
     LaunchedEffect(rideId) {
-        db.rideDao().getRideByIdFlow(rideId).collect { ride = it }
+        currentUserId = authManager.getCurrentUserId()
+        db.rideDao().getRideByIdFlow(rideId).collect { r ->
+            if (r != null) {
+                ride = r
+                if (weatherInfo == null) {
+                    scope.launch {
+                        try {
+                            val response = if (r.startLat != 0.0) {
+                                weatherApi.getWeather(r.startLat, r.startLng, weatherApiKey)
+                            } else if (r.startLocation.isNotBlank()) {
+                                weatherApi.getWeatherByCity(r.startLocation, weatherApiKey)
+                            } else null
+                            
+                            weatherInfo = response
+                        } catch (e: Exception) {
+                            Log.e("Weather", "Error en API: ${e.message}")
+                        }
+                    }
+                }
+            }
+        }
     }
 
     ride?.let { currentRide ->
-        val statusText = when (currentRide.status) {
-            "PLANNED" -> "Programada"
-            "ONGOING" -> "En curso"
-            "COMPLETED" -> "Finalizada"
-            else -> currentRide.status
-        }
+        val isCreator = currentRide.creatorId == currentUserId
 
         Scaffold(
             topBar = {
@@ -85,14 +166,6 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                     .padding(16.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                Text(
-                    text = "Estado de ruta: $statusText",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.ExtraBold,
-                    modifier = Modifier.padding(bottom = 12.dp)
-                )
-
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
@@ -102,80 +175,106 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                         Text(
                             text = currentRide.title,
                             style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.ExtraBold,
-                            modifier = Modifier.padding(bottom = 12.dp)
+                            fontWeight = FontWeight.ExtraBold
                         )
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Contenedor de etiquetas con peso para que el botón tenga su espacio
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                        Text(
+                            text = "${currentRide.participantsCount} moteros confirmados",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+
+                        if (currentRide.status == "COMPLETED") {
+                            Surface(
+                                color = Color(0xFF4CAF50).copy(alpha = 0.1f),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF4CAF50))
                             ) {
-                                val diffColor = when (currentRide.difficulty) {
-                                    "Fácil" -> Color(0xFF4CAF50)
-                                    "Intermedio" -> Color(0xFFFF9800)
-                                    "Difícil" -> Color(0xFFF44336)
-                                    else -> null
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    CategoryCard("Dificultad", currentRide.difficulty, Icons.Default.TrendingUp, diffColor)
-                                    CategoryCard("Terreno", currentRide.terrainType, Icons.Default.Landscape, Color(0xFF757575))
+                                Row(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(Icons.Default.Flag, "Finalizada", tint = Color(0xFF4CAF50))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("RODADA FINALIZADA", fontWeight = FontWeight.Black, color = Color(0xFF4CAF50))
                                 }
                             }
-                            
-                            Spacer(modifier = Modifier.width(8.dp))
-                            
-                            if (currentRide.status == "PLANNED") {
-                                Button(
-                                    onClick = {
-                                        scope.launch {
-                                            val updatedRide = currentRide.copy(
-                                                isAttending = !currentRide.isAttending,
-                                                participantsCount = if (!currentRide.isAttending) currentRide.participantsCount + 1 else currentRide.participantsCount - 1
-                                            )
-                                            db.rideDao().updateRide(updatedRide)
-                                        }
-                                    },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (currentRide.isAttending) Color(0xFF4CAF50) else MaterialTheme.colorScheme.secondaryContainer,
-                                        contentColor = if (currentRide.isAttending) Color.White else MaterialTheme.colorScheme.onSecondaryContainer
-                                    ),
-                                    shape = RoundedCornerShape(8.dp),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                                    modifier = Modifier.wrapContentWidth()
-                                ) {
-                                    Text(
-                                        text = if (currentRide.isAttending) "Asistiré" else "Asistir",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        maxLines = 1 // Evita el texto vertical
-                                    )
+                        }
+
+                        Row(
+                            modifier = Modifier.padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            val diffColor = when (currentRide.difficulty) {
+                                "Fácil" -> Color(0xFF4CAF50)
+                                "Intermedio" -> Color(0xFFFF9800)
+                                "Difícil" -> Color(0xFFF44336)
+                                else -> MaterialTheme.colorScheme.primary
+                            }
+                            Surface(color = diffColor, shape = RoundedCornerShape(4.dp)) {
+                                Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.TrendingUp, null, modifier = Modifier.size(12.dp), tint = Color.White)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Nivel: ${currentRide.difficulty}", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                                 }
-                            } else if (!currentRide.isAttending) {
-                                // Mensaje de advertencia si no asistió y ya inició
+                            }
+                            Surface(color = Color(0xFF757575), shape = RoundedCornerShape(4.dp)) {
+                                Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Landscape, null, modifier = Modifier.size(12.dp), tint = Color.White)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Terreno: ${currentRide.terrainType}", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // SECCIÓN DE CLIMA
+                        Box(modifier = Modifier.fillMaxWidth().animateContentSize()) {
+                            if (weatherInfo != null) {
                                 Surface(
-                                    color = Color(0xFFFFEBEE),
-                                    shape = RoundedCornerShape(8.dp),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.Red)
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text(
-                                        text = "Lo siento, la ruta ya ha iniciado",
-                                        color = Color.Red,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                                    )
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            AsyncImage(
+                                                model = "https://openweathermap.org/img/wn/${weatherInfo?.weather?.firstOrNull()?.icon}@2x.png",
+                                                contentDescription = null,
+                                                modifier = Modifier.size(50.dp)
+                                            )
+                                            Column {
+                                                Text(
+                                                    text = "${weatherInfo?.main?.temp?.toInt()}°C",
+                                                    style = MaterialTheme.typography.headlineSmall,
+                                                    fontWeight = FontWeight.Black
+                                                )
+                                                Text(
+                                                    text = weatherInfo?.weather?.firstOrNull()?.description?.replaceFirstChar { it.uppercase() } ?: "",
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
+                                            }
+                                        }
+                                        Text(text = "EN VIVO", style = MaterialTheme.typography.labelSmall, color = Color.Red, fontWeight = FontWeight.Bold)
+                                    }
                                 }
+                            } else {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
                             }
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(text = currentRide.description, style = MaterialTheme.typography.bodyLarge)
-                        
+
                         Divider(modifier = Modifier.padding(vertical = 16.dp))
                         
                         DetailRow(Icons.Default.Place, "Inicio: ${currentRide.startLocation}")
@@ -183,14 +282,37 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                         
                         val sdf = remember { SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()) }
                         DetailRow(Icons.Default.Event, "Fecha: ${sdf.format(Date(currentRide.date))}")
-                        
-                        DetailRow(Icons.Default.Flag, "Punto de encuentro: ${currentRide.meetingPoint}")
+
+                        if (currentRide.scheduledStops.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                "Paradas Programadas",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            currentRide.scheduledStops.split(",").forEach { stop ->
+                                if (stop.trim().isNotEmpty()) {
+                                    Row(
+                                        modifier = Modifier.padding(vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .background(MaterialTheme.colorScheme.primary, CircleShape)
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Text(stop.trim(), style = MaterialTheme.typography.bodyMedium)
+                                    }
+                                }
+                            }
+                        }
 
                         if (currentRide.startLat != 0.0) {
                             Spacer(modifier = Modifier.height(12.dp))
                             Button(
                                 onClick = {
-                                    val gmmIntentUri = Uri.parse("google.navigation:q=${currentRide.startLat},${currentRide.startLng}")
+                                    val gmmIntentUri = "google.navigation:q=${currentRide.startLat},${currentRide.startLng}".toUri()
                                     val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
                                     context.startActivity(mapIntent)
                                 },
@@ -201,29 +323,113 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                                 Text("Navegar al punto de inicio")
                             }
                         }
-                    }
-                }
 
-                if (currentRide.scheduledStops.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = "Paradas Programadas",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    )
-                    val stops = currentRide.scheduledStops.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                    stops.forEachIndexed { index, stop ->
-                        StopItem(number = index + 1, name = stop, isLast = index == stops.size - 1)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        if (currentRide.status != "COMPLETED") {
+                            if (!isCreator) {
+                                if (!currentRide.isAttending) {
+                                    Button(
+                                        onClick = {
+                                            scope.launch {
+                                                val userId = currentUserId
+                                                val remoteId = currentRide.remoteId
+                                                
+                                                if (userId != null && remoteId != null) {
+                                                    val success = appwrite.joinRemoteRide(remoteId, userId)
+                                                    if (success) {
+                                                        val updatedRide = currentRide.copy(
+                                                            isAttending = true,
+                                                            participantsCount = currentRide.participantsCount + 1
+                                                        )
+                                                        db.rideDao().updateRide(updatedRide)
+                                                        Toast.makeText(context, "¡Te has unido a la rodada!", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        Toast.makeText(context, "Error al unirse (Verifica permisos)", Toast.LENGTH_LONG).show()
+                                                    }
+                                                } else {
+                                                    Toast.makeText(context, "Error: Datos de sesión o ID remoto nulos", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                                    ) {
+                                        Icon(Icons.Default.Add, null)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("UNIRSE A LA RODADA")
+                                    }
+                                } else {
+                                    OutlinedButton(
+                                        onClick = {
+                                            scope.launch {
+                                                val userId = currentUserId
+                                                val remoteId = currentRide.remoteId
+                                                
+                                                if (userId != null && remoteId != null) {
+                                                    val success = appwrite.leaveRemoteRide(remoteId, userId)
+                                                    if (success) {
+                                                        val updatedRide = currentRide.copy(
+                                                            isAttending = false,
+                                                            participantsCount = (currentRide.participantsCount - 1).coerceAtLeast(0)
+                                                        )
+                                                        db.rideDao().updateRide(updatedRide)
+                                                        Toast.makeText(context, "Has cancelado tu asistencia", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(Icons.Default.Close, null)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("CANCELAR ASISTENCIA")
+                                    }
+                                }
+                            } else {
+                                // Feedback para el creador
+                                Surface(
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.secondary)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            "Eres el organizador",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                if (currentRide.status != "COMPLETED") {
+                if (currentRide.status != "COMPLETED" && isCreator) {
                     if (currentRide.status == "PLANNED") {
                         Button(
-                            onClick = { scope.launch { db.rideDao().updateRide(currentRide.copy(status = "ONGOING")) } },
+                            onClick = { 
+                                scope.launch { 
+                                    val success = currentRide.remoteId?.let { 
+                                        appwrite.updateRemoteRide(it, mapOf("status" to "ONGOING"))
+                                    } ?: true
+                                    
+                                    if (success) {
+                                        db.rideDao().updateRide(currentRide.copy(status = "ONGOING"))
+                                    } else {
+                                        Toast.makeText(context, "Error al sincronizar inicio", Toast.LENGTH_SHORT).show()
+                                    }
+                                } 
+                            },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text("COMENZAR RUTA")
@@ -232,158 +438,36 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                         Button(
                             onClick = {
                                 scope.launch {
-                                    val distanceKm = if (currentRide.startLat != 0.0 && currentRide.endLat != 0.0) {
-                                        calculateDistance(currentRide.startLat, currentRide.startLng, currentRide.endLat, currentRide.endLng).toInt()
-                                    } else 50
+                                    // 1. Marcar como completada en la nube
+                                    val success = currentRide.remoteId?.let { 
+                                        appwrite.updateRemoteRide(it, mapOf("status" to "COMPLETED"))
+                                    } ?: true
 
-                                    db.rideDao().updateRide(currentRide.copy(status = "COMPLETED", completedAt = System.currentTimeMillis()))
-                                    
-                                    val user = db.userDao().getUserProfileOnce()
-                                    user?.let { currentProfile ->
-                                        val oldRides = currentProfile.ridesCompleted
-                                        val oldKms = currentProfile.totalKilometers
-                                        val newKms = oldKms + distanceKm
-                                        val newRides = oldRides + 1
-                                        
-                                        // Lógica de progresión de nivel
-                                        val newLevel = when (currentProfile.level) {
-                                            "Experto" -> "Experto"
-                                            "Intermedio" -> if (newKms > 10000) "Experto" else "Intermedio"
-                                            else -> { // Novato
-                                                if (newKms > 10000) "Experto"
-                                                else if (newKms > 2500) "Intermedio"
-                                                else "Novato"
-                                            }
-                                        }
-
-                                        val updatedProfile = currentProfile.copy(
-                                            ridesCompleted = newRides,
-                                            totalKilometers = newKms,
-                                            level = newLevel
+                                    if (!success) {
+                                        Toast.makeText(context, "Error al sincronizar fin", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        // 2. EL CREADOR ACTUALIZA SUS PROPIAS ESTADÍSTICAS INMEDIATAMENTE
+                                        val stampSuccess = appwrite.processRideCompletion(
+                                            context = context,
+                                            db = db,
+                                            ride = currentRide,
+                                            userId = currentUserId ?: ""
                                         )
-                                        db.userDao().insertOrUpdate(updatedProfile)
 
-                                        // Notificaciones de Cambio de Nivel
-                                        if (newLevel != currentProfile.level) {
-                                            notificationHelper.showAchievementUnlocked("¡Ascenso de Rango!", "Has subido a nivel $newLevel.")
+                                        if (stampSuccess) {
+                                            // 3. Actualizar localmente la ruta
+                                            db.rideDao().updateRide(currentRide.copy(status = "COMPLETED"))
+                                            Toast.makeText(context, "¡Ruta Finalizada y Sello Creado!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "Ruta finalizada (Error al crear sello)", Toast.LENGTH_SHORT).show()
                                         }
-
-                                        // Disparar Notificaciones de Logros
-                                        if (oldRides == 0 && newRides >= 1) {
-                                            notificationHelper.showAchievementUnlocked("Bautizo de Asfalto", "Has completado tu primera rodada.")
-                                        }
-                                        if (oldKms < 500 && newKms >= 500) {
-                                            notificationHelper.showAchievementUnlocked("Tragakilómetros", "Has superado los 500km totales.")
-                                        }
-
-                                        // ACTUALIZACIÓN DE LA MOTO PRINCIPAL
-                                        scope.launch(Dispatchers.IO) {
-                                            val userId = authManager.getCurrentUserId()
-                                            if (userId != null) {
-                                                // 1. Sincronizar Perfil en Appwrite
-                                                try {
-                                                    val profilePicId = appwrite.extractFileIdFromUrl(currentProfile.profilePictureUri)
-                                                    val bikePicId = appwrite.extractFileIdFromUrl(currentProfile.bikePictureUri)
-                                                    appwrite.updateUserProfile(
-                                                        userId = userId,
-                                                        name = updatedProfile.name,
-                                                        level = updatedProfile.level,
-                                                        bikeModel = updatedProfile.bikeModel,
-                                                        bikeSpecs = updatedProfile.bikeSpecs,
-                                                        bikeYear = updatedProfile.bikeYear,
-                                                        bikeColor = updatedProfile.bikeColor,
-                                                        totalKm = newKms,
-                                                        rides = newRides,
-                                                        isIndependent = updatedProfile.isIndependent,
-                                                        profilePic = profilePicId,
-                                                        bikePic = bikePicId
-                                                    )
-                                                } catch (e: Exception) { Log.e("RideDetail", "Error sync profile: ${e.message}") }
-
-                                                // 2. Buscar y actualizar la moto principal local y remotamente
-                                                val bikes = db.bikeDao().getAllBikesOnce()
-                                                val mainBike = bikes.find { 
-                                                    it.model == currentProfile.bikeModel && 
-                                                    it.year == currentProfile.bikeYear 
-                                                }
-                                                
-                                                if (mainBike != null) {
-                                                    val updatedBikeKm = mainBike.currentKm + distanceKm
-                                                    val updatedBike = mainBike.copy(currentKm = updatedBikeKm)
-                                                    
-                                                    // Actualizar Local
-                                                    db.bikeDao().insertOrUpdate(updatedBike)
-                                                    
-                                                    // Actualizar Remoto en Appwrite
-                                                    mainBike.remoteId?.let { rid ->
-                                                        try {
-                                                            appwrite.updateRemoteBike(
-                                                                bikeId = rid,
-                                                                model = updatedBike.model,
-                                                                year = updatedBike.year,
-                                                                color = updatedBike.color,
-                                                                specs = updatedBike.specs,
-                                                                status = updatedBike.status,
-                                                                currentKm = updatedBikeKm,
-                                                                picId = null
-                                                            )
-                                                        } catch (e: Exception) { Log.e("RideDetail", "Error sync bike: ${e.message}") }
-                                                    }
-                                                }
-                                            }
-                                        }
+                                        
+                                        kotlinx.coroutines.delay(300) 
+                                        navController.popBackStack()
                                     }
-
-                                    var detectedCity = currentRide.endLocation
-                                    try {
-                                        val geocoder = Geocoder(context, Locale.getDefault())
-                                        val addresses = withContext(Dispatchers.IO) {
-                                            geocoder.getFromLocation(currentRide.endLat, currentRide.endLng, 1)
-                                        }
-                                        val city = addresses?.firstOrNull()?.locality ?: addresses?.firstOrNull()?.subAdminArea
-                                        if (city != null) detectedCity = city
-                                    } catch (e: Exception) { }
-
-                                    val iconStamp = when {
-                                        detectedCity.contains("Machala", true) -> "ic_stamp_machala"
-                                        detectedCity.contains("Guayaquil", true) -> "ic_stamp_guayaquil"
-                                        detectedCity.contains("Cuenca", true) -> "ic_stamp_cuenca"
-                                        detectedCity.contains("Quito", true) -> "ic_stamp_quito"
-                                        else -> "ic_stamp_default"
-                                    }
-
-                                    val newStamp = PassportStampEntity(
-                                        rideId = currentRide.id,
-                                        rideTitle = currentRide.title,
-                                        locationName = detectedCity,
-                                        iconResName = iconStamp,
-                                        date = System.currentTimeMillis()
-                                    )
-                                    db.passportDao().insertStamp(newStamp)
-                                    notificationHelper.showNewPassportStamp(detectedCity)
-
-                                    val totalUniqueCities = withContext(Dispatchers.IO) {
-                                        db.passportDao().getUniqueCitiesCount()
-                                    }
-                                    if (totalUniqueCities == 3) {
-                                        notificationHelper.showAchievementUnlocked("Explorador Regional", "Has visitado 3 ciudades diferentes.")
-                                    } else if (totalUniqueCities == 10) {
-                                        notificationHelper.showAchievementUnlocked("Leyenda de la Carretera", "Has visitado 10 ciudades diferentes.")
-                                    }
-                                    
-                                    scope.launch(Dispatchers.IO) {
-                                        try {
-                                            val uId = authManager.getCurrentUserId()
-                                            if (uId != null) appwrite.syncStamp(uId, newStamp)
-                                        } catch (e: Exception) { }
-                                    }
-                                    
-                                    Toast.makeText(context, "¡Ruta finalizada en $detectedCity!", Toast.LENGTH_LONG).show()
-                                    navController.popBackStack()
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Text("FINALIZAR RUTA")
                         }
@@ -395,74 +479,36 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
 }
 
 @Composable
-fun CategoryCard(label: String, value: String, icon: ImageVector, containerColor: Color? = null) {
-    Surface(
-        color = containerColor ?: MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        shape = RoundedCornerShape(6.dp),
-        modifier = Modifier.wrapContentWidth()
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp), 
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                icon, 
-                null, 
-                modifier = Modifier.size(12.dp), 
-                tint = if (containerColor != null) Color.White else MaterialTheme.colorScheme.primary
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            Text(
-                text = value, // Solo mostramos el valor para ahorrar espacio
-                style = MaterialTheme.typography.labelSmall, 
-                fontWeight = FontWeight.Bold,
-                color = if (containerColor != null) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1
-            )
-        }
-    }
-}
-
-@Composable
 fun DetailRow(icon: ImageVector, text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-        Icon(icon, null, modifier = Modifier.size(20.dp), tint = Color.Gray)
+    Row(modifier = Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
         Spacer(modifier = Modifier.width(12.dp))
         Text(text = text, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
-@Composable
-fun StopItem(number: Int, name: String, isLast: Boolean) {
-    Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(24.dp)) {
-            Box(
-                modifier = Modifier
-                    .size(20.dp)
-                    .background(MaterialTheme.colorScheme.primary, CircleShape), 
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = number.toString(), 
-                    color = Color(0xFF6200EE), // Color morado para contraste
-                    style = MaterialTheme.typography.labelSmall, 
-                    fontWeight = FontWeight.ExtraBold
-                )
-            }
-            if (!isLast) {
-                Box(modifier = Modifier.width(2.dp).fillMaxHeight().background(MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)))
-            }
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(text = name, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 16.dp))
-    }
+/**
+ * Función obsoleta, ahora se usa appwrite.processRideCompletion para centralizar la lógica.
+ */
+@Deprecated("Use appwrite.processRideCompletion")
+suspend fun updateUserStatsAndStamp(
+    context: android.content.Context,
+    db: com.example.motoday.data.local.AppDatabase,
+    appwrite: com.example.motoday.data.remote.AppwriteManager,
+    authManager: com.example.motoday.data.remote.AuthManager,
+    ride: com.example.motoday.data.local.entities.RideEntity,
+    currentUserId: String?
+) {
+    currentUserId?.let { appwrite.processRideCompletion(context, db, ride, it) }
 }
 
 fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
-    val r = 6371.0
+    val r = 6371 
     val dLat = Math.toRadians(lat2 - lat1)
     val dLon = Math.toRadians(lon2 - lon1)
-    val a = sin(dLat / 2) * sin(dLat / 2) + cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2) * sin(dLon / 2)
+    val a = sin(dLat / 2) * sin(dLat / 2) +
+            cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) *
+            sin(dLon / 2) * sin(dLon / 2)
     val c = 2 * atan2(sqrt(a), sqrt(1 - a))
     return r * c
 }

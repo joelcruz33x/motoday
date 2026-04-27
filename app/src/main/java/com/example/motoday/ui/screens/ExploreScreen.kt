@@ -25,6 +25,7 @@ import io.appwrite.models.Document
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,6 +38,11 @@ fun ExploreScreen(navController: NavController) {
 
     val localRides by db.rideDao().getAllRides().collectAsState(initial = emptyList())
     
+    // Estado para búsqueda y pestañas
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedTab by remember { mutableIntStateOf(0) } // 0: Todas, 1: Mis Rodadas
+    var currentUserId by remember { mutableStateOf<String?>(null) }
+
     // Estado para rodadas remotas
     var remoteRides by remember { mutableStateOf<List<Document<Map<String, Any>>>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -58,7 +64,49 @@ fun ExploreScreen(navController: NavController) {
     }
 
     LaunchedEffect(Unit) {
+        currentUserId = authManager.getCurrentUserId()
         refreshRides()
+    }
+
+    // Listener Realtime para actualizaciones globales (Sincroniza Room con Appwrite)
+    DisposableEffect(Unit) {
+        val realtime = io.appwrite.services.Realtime(appwrite.client)
+        val subscription = realtime.subscribe(
+            "databases.${AppwriteManager.DATABASE_ID}.collections.${AppwriteManager.COLLECTION_RIDES_ID}.documents"
+        ) { event ->
+            val payload = event.payload as? Map<*, *>
+            val remoteId = payload?.get("\$id")?.toString()
+            
+            if (payload != null && remoteId != null) {
+                val remoteStatus = payload["status"]?.toString() ?: ""
+                val participantIds = (payload["participantIds"] as? List<*>)?.map { it.toString() } ?: emptyList()
+                
+                scope.launch {
+                    val localRide = db.rideDao().getRideByRemoteId(remoteId)
+                    if (localRide != null) {
+                        val userId = authManager.getCurrentUserId()
+                        val isAttendingNow = if (localRide.creatorId == userId) true 
+                                            else (userId?.let { participantIds.contains(it) } ?: localRide.isAttending)
+                        
+                        val newCount = if (localRide.creatorId != null && !participantIds.contains(localRide.creatorId)) {
+                            participantIds.size + 1
+                        } else {
+                            participantIds.size
+                        }
+
+                        if (localRide.status != remoteStatus || localRide.participantsCount != newCount || localRide.isAttending != isAttendingNow) {
+                            Log.d("ExploreRealtime", "Actualizando ruta local $remoteId -> Status: $remoteStatus")
+                            db.rideDao().updateRide(localRide.copy(
+                                status = remoteStatus,
+                                participantsCount = newCount,
+                                isAttending = isAttendingNow
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+        onDispose { subscription.close() }
     }
 
     // Limpieza automática de rutas finalizadas hace más de 1 hora
@@ -69,14 +117,56 @@ fun ExploreScreen(navController: NavController) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Explorar Rodadas") },
-                actions = {
-                    IconButton(onClick = { refreshRides() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refrescar")
+            Column {
+                TopAppBar(
+                    title = { Text("Explorar Rodadas") },
+                    actions = {
+                        IconButton(onClick = { refreshRides() }) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refrescar")
+                        }
                     }
+                )
+                
+                // Barra de búsqueda
+                TextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    placeholder = { Text("Buscar rodada por nombre...") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "Limpiar")
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = TextFieldDefaults.colors(
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent
+                    )
+                )
+
+                // Selector de pestañas
+                TabRow(selectedTabIndex = selectedTab) {
+                    Tab(
+                        selected = selectedTab == 0,
+                        onClick = { selectedTab = 0 },
+                        text = { Text("Todas") },
+                        icon = { Icon(Icons.Default.Public, null) }
+                    )
+                    Tab(
+                        selected = selectedTab == 1,
+                        onClick = { selectedTab = 1 },
+                        text = { Text("Mis Rodadas") },
+                        icon = { Icon(Icons.Default.Person, null) }
+                    )
                 }
-            )
+            }
         },
         floatingActionButton = {
             FloatingActionButton(
@@ -98,14 +188,36 @@ fun ExploreScreen(navController: NavController) {
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            item {
-                Text(text = "Rodadas Programadas", style = MaterialTheme.typography.headlineSmall)
+            val filteredLocalRides = localRides.filter { ride ->
+                val matchesSearch = ride.title.contains(searchQuery, ignoreCase = true)
+                val matchesTab = if (selectedTab == 1) ride.creatorId == currentUserId else true
+                matchesSearch && matchesTab
             }
-            
-            if (localRides.isEmpty() && remoteRides.isEmpty() && !isLoading) {
+
+            val filteredRemoteDocs = remoteRides.filter { doc ->
+                val title = doc.data["title"]?.toString() ?: ""
+                val creatorId = doc.data["creatorId"]?.toString() ?: ""
+                val matchesSearch = title.contains(searchQuery, ignoreCase = true)
+                val matchesTab = if (selectedTab == 1) creatorId == currentUserId else true
+                
+                // Evitar duplicados con locales
+                val dateLong = (doc.data["date"] as? Number)?.toLong() ?: 0L
+                val isNotLocal = localRides.none { local -> 
+                    local.title == title && abs(local.date - dateLong) < 1000
+                }
+                
+                matchesSearch && matchesTab && isNotLocal
+            }
+
+            if (filteredLocalRides.isEmpty() && filteredRemoteDocs.isEmpty() && !isLoading) {
                 item {
                     Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                        Text("No hay rodadas programadas. ¡Crea una!", color = Color.Gray)
+                        Text(
+                            text = if (searchQuery.isNotEmpty()) "No se encontraron resultados" 
+                                   else if (selectedTab == 1) "Aún no has creado rodadas"
+                                   else "No hay rodadas programadas", 
+                            color = Color.Gray
+                        )
                     }
                 }
             }
@@ -118,9 +230,9 @@ fun ExploreScreen(navController: NavController) {
                 }
             }
 
-            // Mostrar Rodadas Locales Primero (las que el usuario creó o está siguiendo)
-            items(localRides.size) { index ->
-                val ride = localRides[index]
+            // Mostrar Rodadas Locales Primero
+            items(filteredLocalRides.size) { index ->
+                val ride = filteredLocalRides[index]
                 val sdf = SimpleDateFormat("dd MMM, yyyy - hh:mm a", Locale.getDefault())
                 val dateString = sdf.format(Date(ride.date))
 
@@ -143,17 +255,9 @@ fun ExploreScreen(navController: NavController) {
                 )
             }
 
-            // Mostrar Rodadas Remotas (que no están en la DB local)
-            val filteredRemoteRides = remoteRides.filter { remote ->
-                val remoteTitle = remote.data["title"]?.toString() ?: ""
-                val remoteDate = (remote.data["date"] as? Number)?.toLong() ?: 0L
-                localRides.none { local -> 
-                    local.title == remoteTitle && Math.abs(local.date - remoteDate) < 1000 
-                }
-            }
-
-            items(filteredRemoteRides.size) { index ->
-                val doc = filteredRemoteRides[index]
+            // Mostrar Rodadas Remotas
+            items(filteredRemoteDocs.size) { index ->
+                val doc = filteredRemoteDocs[index]
                 val data = doc.data
                 val sdf = SimpleDateFormat("dd MMM, yyyy - hh:mm a", Locale.getDefault())
                 val dateLong = (data["date"] as? Number)?.toLong() ?: 0L
@@ -172,7 +276,6 @@ fun ExploreScreen(navController: NavController) {
                     onClick = {
                         scope.launch {
                             try {
-                                // 1. Mapear datos remotos a Entidad Local
                                 val newRide = com.example.motoday.data.local.entities.RideEntity(
                                     title = data["title"].toString(),
                                     description = data["description"].toString(),
@@ -190,13 +293,12 @@ fun ExploreScreen(navController: NavController) {
                                     creatorName = data["creatorName"].toString(),
                                     isAttending = false,
                                     participantsCount = participants,
-                                    isSynced = true
+                                    isSynced = true,
+                                    remoteId = doc.id,
+                                    creatorId = data["creatorId"]?.toString()
                                 )
-                                
-                                // 2. Guardar localmente
                                 db.rideDao().insertRide(newRide)
                                 Toast.makeText(context, "¡Ruta añadida a tu agenda!", Toast.LENGTH_SHORT).show()
-                                
                             } catch (e: Exception) {
                                 Toast.makeText(context, "Error al importar ruta: ${e.message}", Toast.LENGTH_LONG).show()
                             }

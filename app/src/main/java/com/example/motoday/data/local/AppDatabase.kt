@@ -25,7 +25,7 @@ import com.example.motoday.data.local.entities.UserEntity
 import com.example.motoday.data.local.entities.BikeEntity
 import com.example.motoday.data.local.entities.BikePhotoEntity
 
-@Database(entities = [PostEntity::class, RideEntity::class, UserEntity::class, ContactEntity::class, MaintenanceEntity::class, PassportStampEntity::class, StoryEntity::class, SeenStoryEntity::class, BikeEntity::class, BikePhotoEntity::class], version = 30)
+@Database(entities = [PostEntity::class, RideEntity::class, UserEntity::class, ContactEntity::class, MaintenanceEntity::class, PassportStampEntity::class, StoryEntity::class, SeenStoryEntity::class, BikeEntity::class, BikePhotoEntity::class], version = 36)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun postDao(): PostDao
     abstract fun rideDao(): RideDao

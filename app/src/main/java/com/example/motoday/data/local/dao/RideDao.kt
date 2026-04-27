@@ -12,6 +12,9 @@ interface RideDao {
     @Query("SELECT * FROM rides WHERE id = :id")
     suspend fun getRideById(id: Int): RideEntity?
 
+    @Query("SELECT * FROM rides WHERE remoteId = :remoteId")
+    suspend fun getRideByRemoteId(remoteId: String): RideEntity?
+
     @Query("SELECT * FROM rides WHERE id = :id")
     fun getRideByIdFlow(id: Int): Flow<RideEntity?>
 

@@ -19,8 +19,8 @@ interface PassportDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertStamps(stamps: List<PassportStampEntity>)
 
-    @Query("SELECT COUNT(*) FROM passport_stamps WHERE rideId = :rideId")
-    suspend fun hasStampForRide(rideId: Int): Int
+    @Query("SELECT COUNT(*) FROM passport_stamps WHERE rideRemoteId = :remoteId")
+    suspend fun hasStampForRide(remoteId: String): Int
 
     @Query("SELECT COUNT(DISTINCT LOWER(locationName)) FROM passport_stamps")
     suspend fun getUniqueCitiesCount(): Int
