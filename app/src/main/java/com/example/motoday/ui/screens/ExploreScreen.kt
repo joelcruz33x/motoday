@@ -2,6 +2,7 @@ package com.example.motoday.ui.screens
 
 import android.util.Log
 import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -41,6 +43,7 @@ fun ExploreScreen(navController: NavController) {
     // Estado para búsqueda y pestañas
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Todas, 1: Mis Rodadas
+    var selectedStatusTab by remember { mutableIntStateOf(0) } // 0: Disponibles, 1: Me uní, 2: En curso, 3: Finalizadas
     var currentUserId by remember { mutableStateOf<String?>(null) }
 
     // Estado para rodadas remotas
@@ -166,6 +169,37 @@ fun ExploreScreen(navController: NavController) {
                         icon = { Icon(Icons.Default.Person, null) }
                     )
                 }
+
+                // Filtro de estado mejorado
+                ScrollableTabRow(
+                    selectedTabIndex = selectedStatusTab,
+                    edgePadding = 16.dp,
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    divider = {},
+                    indicator = {}
+                ) {
+                    val statuses = listOf("Disponibles", "Me uní", "En curso", "Finalizadas")
+                    statuses.forEachIndexed { index, title ->
+                        Tab(
+                            selected = selectedStatusTab == index,
+                            onClick = { selectedStatusTab = index },
+                            text = {
+                                Text(
+                                    text = title,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = if (selectedStatusTab == index) FontWeight.Bold else FontWeight.Normal
+                                )
+                            },
+                            modifier = Modifier
+                                .padding(vertical = 8.dp, horizontal = 4.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(
+                                    if (selectedStatusTab == index) MaterialTheme.colorScheme.primaryContainer
+                                    else Color.Transparent
+                                )
+                        )
+                    }
+                }
             }
         },
         floatingActionButton = {
@@ -191,14 +225,35 @@ fun ExploreScreen(navController: NavController) {
             val filteredLocalRides = localRides.filter { ride ->
                 val matchesSearch = ride.title.contains(searchQuery, ignoreCase = true)
                 val matchesTab = if (selectedTab == 1) ride.creatorId == currentUserId else true
-                matchesSearch && matchesTab
+                
+                val matchesStatus = when(selectedStatusTab) {
+                    0 -> ride.status == "PLANNED" // Disponibles
+                    1 -> ride.isAttending && ride.status != "COMPLETED" // Me uní
+                    2 -> ride.status == "ONGOING" // En curso
+                    3 -> ride.status == "COMPLETED" // Finalizadas
+                    else -> true
+                }
+                
+                matchesSearch && matchesTab && matchesStatus
             }
 
             val filteredRemoteDocs = remoteRides.filter { doc ->
                 val title = doc.data["title"]?.toString() ?: ""
                 val creatorId = doc.data["creatorId"]?.toString() ?: ""
+                val status = doc.data["status"]?.toString() ?: "PLANNED"
+                val participantIds = (doc.data["participantIds"] as? List<*>)?.map { it.toString() } ?: emptyList()
+                val isAttending = currentUserId != null && participantIds.contains(currentUserId)
+                
                 val matchesSearch = title.contains(searchQuery, ignoreCase = true)
                 val matchesTab = if (selectedTab == 1) creatorId == currentUserId else true
+                
+                val matchesStatus = when(selectedStatusTab) {
+                    0 -> status == "PLANNED"
+                    1 -> isAttending && status != "COMPLETED"
+                    2 -> status == "ONGOING"
+                    3 -> status == "COMPLETED"
+                    else -> true
+                }
                 
                 // Evitar duplicados con locales
                 val dateLong = (doc.data["date"] as? Number)?.toLong() ?: 0L
@@ -206,7 +261,7 @@ fun ExploreScreen(navController: NavController) {
                     local.title == title && abs(local.date - dateLong) < 1000
                 }
                 
-                matchesSearch && matchesTab && isNotLocal
+                matchesSearch && matchesTab && isNotLocal && matchesStatus
             }
 
             if (filteredLocalRides.isEmpty() && filteredRemoteDocs.isEmpty() && !isLoading) {

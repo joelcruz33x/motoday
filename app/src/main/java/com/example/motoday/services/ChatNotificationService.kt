@@ -15,6 +15,7 @@ import kotlinx.coroutines.*
 class ChatNotificationService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var realtimeSubscription: io.appwrite.models.RealtimeSubscription? = null
+    private var groupsSubscription: io.appwrite.models.RealtimeSubscription? = null
     private lateinit var appwrite: AppwriteManager
     
     companion object {
@@ -77,6 +78,30 @@ class ChatNotificationService : Service() {
                         notificationHelper.showChatNotification("Nuevo mensaje", senderName, content)
                     }
                 }
+
+                // Suscripción a solicitudes de unión (Escuchando cambios en la colección de grupos)
+                groupsSubscription = realtime.subscribe(
+                    "databases.${AppwriteManager.DATABASE_ID}.collections.${AppwriteManager.COLLECTION_GROUPS_ID}.documents"
+                ) { event ->
+                    val payload = event.payload as? Map<String, Any> ?: return@subscribe
+                    val adminId = payload["adminId"] as? String
+                    
+                    // Solo si el usuario actual es el admin del grupo
+                    if (adminId == userId) {
+                        val lastRequesterId = payload["lastRequesterId"] as? String
+                        val lastRequestTime = (payload["lastRequestTime"] as? Number)?.toLong() ?: 0L
+                        
+                        // Si hay un solicitante reciente (últimos 30 segundos para evitar duplicados en reconexiones)
+                        if (lastRequesterId != null && (System.currentTimeMillis() - lastRequestTime) < 30000) {
+                            serviceScope.launch {
+                                val requesterProfile = appwrite.getUserProfile(lastRequesterId)
+                                val requesterName = requesterProfile?.data?.get("name") as? String ?: "Un motero"
+                                val groupName = payload["name"] as? String ?: "tu grupo"
+                                notificationHelper.showJoinRequestNotification(groupName, requesterName)
+                            }
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 delay(10000)
                 startListening()
@@ -94,6 +119,7 @@ class ChatNotificationService : Service() {
 
     override fun onDestroy() {
         realtimeSubscription?.close()
+        groupsSubscription?.close()
         serviceScope.cancel()
         super.onDestroy()
     }

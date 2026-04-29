@@ -29,11 +29,15 @@ class CleanupWorker(
                 Log.d("CleanupWorker", "Historias eliminadas: $deletedStories")
             }
 
-            // 2. Limpieza de Rutas finalizadas (Local)
-            // Borramos rutas terminadas hace más de 1 hora
+            // 2. Limpieza de Rutas finalizadas (Local y Remoto)
             val oneHourAgo = System.currentTimeMillis() - (60 * 60 * 1000)
+            
+            // Local
             db.rideDao().cleanupOldRides(oneHourAgo)
-            Log.d("CleanupWorker", "Limpieza de rutas locales completada")
+            
+            // Remoto
+            val deletedRemoteRides = appwrite.cleanupOldRemoteRides()
+            Log.d("CleanupWorker", "Limpieza de rutas completada (Local y $deletedRemoteRides remotas)")
 
             Result.success()
         } catch (e: Exception) {

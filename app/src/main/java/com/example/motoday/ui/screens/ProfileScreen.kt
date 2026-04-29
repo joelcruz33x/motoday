@@ -745,14 +745,6 @@ fun ProfileHeader(
                                     fontWeight = FontWeight.ExtraBold,
                                     letterSpacing = 1.sp
                                 )
-                                if (rankStyle.third != "Miembro") {
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "• ${rankStyle.third}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = Color.Gray
-                                    )
-                                }
                             }
                             Text(
                                 text = groupName,

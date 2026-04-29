@@ -44,7 +44,16 @@ class NotificationHelper(val context: Context) {
             notificationManager.createNotificationChannel(NotificationChannel(
                 chatChannelId, "Mensajes de Grupo", NotificationManager.IMPORTANCE_HIGH
             ).apply { description = "Notificaciones de nuevos mensajes en tus grupos" })
+
+            // Canal Solicitudes
+            notificationManager.createNotificationChannel(NotificationChannel(
+                "request_alerts", "Solicitudes de Ingreso", NotificationManager.IMPORTANCE_HIGH
+            ).apply { description = "Avisos cuando alguien quiere unirse a tu grupo" })
         }
+    }
+
+    fun showJoinRequestNotification(groupName: String, requesterName: String) {
+        sendNotification("request_alerts", 5001, "Nueva solicitud: $groupName", "$requesterName quiere unirse al club", android.R.drawable.ic_menu_add)
     }
 
     fun showChatNotification(groupName: String, senderName: String, message: String) {

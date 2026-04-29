@@ -353,6 +353,7 @@ class AppwriteManager(context: Context) {
                     "roles" to gson.toJson(mapOf(adminId to "Presidente")),
                     "iconResName" to (iconResName ?: ""),
                     "photoUrl" to (photoUrl ?: ""),
+                    "requests" to emptyList<String>(),
                     "createdAt" to System.currentTimeMillis()
                 )
             )
@@ -443,7 +444,11 @@ class AppwriteManager(context: Context) {
             val requests = (doc.data["requests"] as? List<*>)?.map { it.toString() }?.toMutableList() ?: mutableListOf()
             if (!requests.contains(userId)) {
                 requests.add(userId)
-                databases.updateDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId, mapOf("requests" to requests))
+                databases.updateDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId, mapOf(
+                    "requests" to requests,
+                    "lastRequesterId" to userId,
+                    "lastRequestTime" to System.currentTimeMillis()
+                ))
             }
             true
         } catch (e: Exception) {
@@ -855,6 +860,14 @@ class AppwriteManager(context: Context) {
                     db.passportDao().insertStamp(newStamp)
                     syncStamp(userId, newStamp)
                 }
+
+                // 4. Marcar como completada en Remoto para limpieza posterior
+                updateRemoteRide(remoteId, mapOf(
+                    "status" to "COMPLETED",
+                    "completedAt" to System.currentTimeMillis(),
+                    "distanceKm" to distanceKm
+                ))
+
                 true
             } catch (e: Exception) {
                 Log.e("AppwriteManager", "Error processRideCompletion: ${e.message}")
@@ -949,6 +962,33 @@ class AppwriteManager(context: Context) {
         } catch (e: Exception) {
             Log.e("AppwriteManager", "Error leaveRemoteRide: ${e.message}")
             false
+        }
+    }
+
+    suspend fun cleanupOldRemoteRides(): Int {
+        return try {
+            val oneHourAgo = System.currentTimeMillis() - (60 * 60 * 1000)
+            val response = databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_RIDES_ID,
+                queries = listOf(
+                    io.appwrite.Query.equal("status", "COMPLETED"),
+                    io.appwrite.Query.lessThan("completedAt", oneHourAgo)
+                )
+            )
+            var deletedCount = 0
+            response.documents.forEach { doc ->
+                try {
+                    databases.deleteDocument(DATABASE_ID, COLLECTION_RIDES_ID, doc.id)
+                    deletedCount++
+                } catch (e: Exception) {
+                    Log.e("AppwriteManager", "Error eliminando ruta remota ${doc.id}: ${e.message}")
+                }
+            }
+            deletedCount
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error cleanupOldRemoteRides: ${e.message}")
+            0
         }
     }
 
