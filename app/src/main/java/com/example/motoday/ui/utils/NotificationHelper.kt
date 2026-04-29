@@ -14,6 +14,7 @@ class NotificationHelper(val context: Context) {
     private val maintenanceChannelId = "maintenance_alerts"
     private val achievementChannelId = "achievement_alerts"
     private val passportChannelId = "passport_alerts"
+    private val chatChannelId = "chat_alerts"
 
     init {
         createNotificationChannels()
@@ -38,7 +39,16 @@ class NotificationHelper(val context: Context) {
             notificationManager.createNotificationChannel(NotificationChannel(
                 passportChannelId, "Pasaporte de Rutas", NotificationManager.IMPORTANCE_DEFAULT
             ).apply { description = "Avisos sobre nuevos sellos y ciudades" })
+
+            // Canal Chat
+            notificationManager.createNotificationChannel(NotificationChannel(
+                chatChannelId, "Mensajes de Grupo", NotificationManager.IMPORTANCE_HIGH
+            ).apply { description = "Notificaciones de nuevos mensajes en tus grupos" })
         }
+    }
+
+    fun showChatNotification(groupName: String, senderName: String, message: String) {
+        sendNotification(chatChannelId, 4001, groupName, "$senderName: $message", android.R.drawable.ic_dialog_email) 
     }
 
     fun showMaintenanceAlert(title: String, message: String) {
@@ -55,20 +65,22 @@ class NotificationHelper(val context: Context) {
 
     private fun sendNotification(channelId: String, notificationId: Int, title: String, message: String, icon: Int) {
         val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val pendingIntent: PendingIntent = PendingIntent.getActivity(
             context, notificationId, intent, 
-            PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
         val builder = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(icon)
             .setContentTitle(title)
             .setContentText(message)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(notificationId, builder.build())

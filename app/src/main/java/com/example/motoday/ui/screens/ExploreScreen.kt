@@ -276,31 +276,47 @@ fun ExploreScreen(navController: NavController) {
                     onClick = {
                         scope.launch {
                             try {
-                                val newRide = com.example.motoday.data.local.entities.RideEntity(
-                                    title = data["title"].toString(),
-                                    description = data["description"].toString(),
-                                    date = dateLong,
-                                    startLocation = data["startLocation"].toString(),
-                                    endLocation = data["endLocation"].toString(),
-                                    startLat = (data["startLat"] as? Number)?.toDouble() ?: 0.0,
-                                    startLng = (data["startLng"] as? Number)?.toDouble() ?: 0.0,
-                                    endLat = (data["endLat"] as? Number)?.toDouble() ?: 0.0,
-                                    endLng = (data["endLng"] as? Number)?.toDouble() ?: 0.0,
-                                    meetingPoint = data["meetingPoint"].toString(),
-                                    scheduledStops = (data["scheduledStops"] as? List<*>)?.joinToString(", ") ?: "",
-                                    difficulty = data["difficulty"].toString(),
-                                    terrainType = data["terrainType"].toString(),
-                                    creatorName = data["creatorName"].toString(),
-                                    isAttending = false,
-                                    participantsCount = participants,
-                                    isSynced = true,
-                                    remoteId = doc.id,
-                                    creatorId = data["creatorId"]?.toString()
-                                )
-                                db.rideDao().insertRide(newRide)
-                                Toast.makeText(context, "¡Ruta añadida a tu agenda!", Toast.LENGTH_SHORT).show()
+                                // 1. Verificar si ya existe por remoteId (doble check)
+                                val remoteId = doc.id
+                                val existingLocal = db.rideDao().getRideByRemoteId(remoteId)
+                                
+                                val localId = if (existingLocal == null) {
+                                    // 2. Mapear datos remotos a Entidad Local e Insertar
+                                    val newRide = com.example.motoday.data.local.entities.RideEntity(
+                                        title = data["title"].toString(),
+                                        description = data["description"].toString(),
+                                        date = dateLong,
+                                        startLocation = data["startLocation"].toString(),
+                                        endLocation = data["endLocation"].toString(),
+                                        startLat = (data["startLat"] as? Number)?.toDouble() ?: 0.0,
+                                        startLng = (data["startLng"] as? Number)?.toDouble() ?: 0.0,
+                                        endLat = (data["endLat"] as? Number)?.toDouble() ?: 0.0,
+                                        endLng = (data["endLng"] as? Number)?.toDouble() ?: 0.0,
+                                        meetingPoint = data["meetingPoint"].toString(),
+                                        scheduledStops = (data["scheduledStops"] as? List<*>)?.joinToString(", ") ?: "",
+                                        difficulty = data["difficulty"].toString(),
+                                        terrainType = data["terrainType"].toString(),
+                                        creatorName = data["creatorName"].toString(),
+                                        isAttending = false,
+                                        participantsCount = participants,
+                                        isSynced = true,
+                                        remoteId = remoteId,
+                                        creatorId = data["creatorId"]?.toString()
+                                    )
+                                    db.rideDao().insertRide(newRide)
+                                    // Buscar el ID recién generado
+                                    db.rideDao().getRideByRemoteId(remoteId)?.id ?: 0
+                                } else {
+                                    existingLocal.id
+                                }
+                                
+                                // 3. Navegar inmediatamente
+                                if (localId != 0) {
+                                    navController.navigate(Screen.RideDetail.createRoute(localId))
+                                }
                             } catch (e: Exception) {
-                                Toast.makeText(context, "Error al importar ruta: ${e.message}", Toast.LENGTH_LONG).show()
+                                Log.e("ExploreScreen", "Error al abrir ruta: ${e.message}")
+                                Toast.makeText(context, "Error al abrir la ruta", Toast.LENGTH_SHORT).show()
                             }
                         }
                     }

@@ -559,24 +559,29 @@ class AppwriteManager(context: Context) {
     }
 
     suspend fun sendMessage(groupId: String, senderId: String, senderName: String, text: String, imageUrl: String? = null): String? {
-        return try {
-            val data = mutableMapOf(
-                "groupId" to groupId,
-                "senderId" to senderId,
-                "senderName" to senderName,
-                "text" to text,
-                "timestamp" to System.currentTimeMillis()
-            )
-            if (imageUrl != null) data["imageUrl"] = imageUrl
+        val finalBoxText = if (text.isBlank() && !imageUrl.isNullOrBlank()) "📷 Foto" else text
+        val data = mutableMapOf<String, Any>(
+            "groupId" to groupId,
+            "senderId" to senderId,
+            "senderName" to senderName,
+            "text" to finalBoxText,
+            "timestamp" to System.currentTimeMillis()
+        )
+        
+        if (!imageUrl.isNullOrBlank()) {
+            data["imageUrl"] = imageUrl
+        }
 
+        return try {
             val response = databases.createDocument(
                 databaseId = DATABASE_ID,
                 collectionId = COLLECTION_MESSAGES_ID,
-                documentId = UUID.randomUUID().toString(),
+                documentId = ID.unique(),
                 data = data
             )
             response.id
         } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error sendMessage: ${e.message}")
             null
         }
     }
@@ -878,11 +883,7 @@ class AppwriteManager(context: Context) {
                 databaseId = DATABASE_ID,
                 collectionId = COLLECTION_RIDES_ID,
                 documentId = io.appwrite.ID.unique(),
-                data = data,
-                permissions = listOf(
-                    io.appwrite.Permission.read(io.appwrite.Role.any()),
-                    io.appwrite.Permission.update(io.appwrite.Role.any())
-                )
+                data = data
             )
             response.id
         } catch (e: Exception) {
@@ -963,8 +964,21 @@ class AppwriteManager(context: Context) {
 
     // --- ALMACENAMIENTO ---
     suspend fun uploadImage(file: InputFile, bucketId: String = BUCKET_POSTS_ID): String {
-        val response = storage.createFile(bucketId, ID.unique(), file)
-        return response.id
+        return try {
+            // Intentamos la subida sin permisos explícitos para mayor compatibilidad
+            val response = storage.createFile(
+                bucketId = bucketId,
+                fileId = ID.unique(),
+                file = file
+            )
+            response.id
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error fatal uploadImage: ${e.message}")
+            if (e is io.appwrite.exceptions.AppwriteException) {
+                Log.e("AppwriteManager", "Bucket: $bucketId, Code: ${e.code}, Response: ${e.response}")
+            }
+            throw e
+        }
     }
 
     suspend fun deleteFile(fileId: String, bucketId: String = BUCKET_BIKES_ID): Boolean {

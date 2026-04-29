@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -32,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.core.net.toUri
 import java.text.SimpleDateFormat
 import java.util.*
 import androidx.compose.ui.platform.LocalContext
@@ -48,8 +50,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import io.appwrite.models.Document
 import io.appwrite.services.Realtime
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+
 
 enum class MessageStatus {
     SENDING, SENT, READ, ERROR
@@ -66,14 +67,6 @@ data class ChatMessage(
     val isLocation: Boolean = false,
     val id: String = UUID.randomUUID().toString(),
     val status: MessageStatus = MessageStatus.SENT
-)
-
-data class GroupInfo(
-    val id: Int,
-    var name: String,
-    val icon: ImageVector,
-    val color: Color,
-    var photoUri: String? = null
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -134,8 +127,15 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
             remoteMessages.forEach { doc ->
                 val senderId = doc.data["senderId"] as? String ?: ""
                 val ts = doc.data["timestamp"] as? Number ?: 0L
-                val rawImageUrl = doc.data["imageUrl"] as? String
-                val finalImageUrl = if (!rawImageUrl.isNullOrEmpty()) {
+                
+                // Extracción segura: Maneja si es String o List
+                val rawVal = doc.data["imageUrl"]
+                val rawImageUrl = if (rawVal is List<*>) rawVal.firstOrNull()?.toString() else rawVal?.toString()
+                
+                val finalImageUrl = if (!rawImageUrl.isNullOrBlank() && 
+                    rawImageUrl != "null" && 
+                    !rawImageUrl.contains("[") && 
+                    rawImageUrl.length > 5) {
                     appwrite.getImageUrl(rawImageUrl, AppwriteManager.BUCKET_GROUPS_ID)
                 } else null
 
@@ -174,12 +174,17 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                 val msgGroupId = payload["groupId"] as? String
                 if (msgGroupId == groupId) {
                     val senderId = payload["senderId"] as? String ?: ""
-                    // Evitar duplicados si somos nosotros quienes enviamos (ya lo añadimos localmente)
                     if (senderId != currentUserId) {
                         val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
                         val ts = (payload["timestamp"] as? Number)?.toLong() ?: System.currentTimeMillis()
-                        val rawImageUrl = payload["imageUrl"] as? String
-                        val finalImageUrl = if (!rawImageUrl.isNullOrEmpty()) {
+                        
+                        val rawVal = payload["imageUrl"]
+                        val rawImageUrl = if (rawVal is List<*>) rawVal.firstOrNull()?.toString() else rawVal?.toString()
+                        
+                        val finalImageUrl = if (!rawImageUrl.isNullOrBlank() && 
+                            rawImageUrl != "null" && 
+                            !rawImageUrl.contains("[") && 
+                            rawImageUrl.length > 5) {
                             appwrite.getImageUrl(rawImageUrl, AppwriteManager.BUCKET_GROUPS_ID)
                         } else null
                         
@@ -273,7 +278,8 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                                     bytes = bytes,
                                     filename = "chat_${System.currentTimeMillis()}.jpg",
                                     mimeType = "image/jpeg"
-                                )
+                                ),
+                                AppwriteManager.BUCKET_GROUPS_ID
                             )
                             
                             // 3. Enviar mensaje con el ID de la imagen
@@ -396,7 +402,7 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                         // 1. Subir imagen si existe
                         if (imageUri != null) {
                             try {
-                                val inputStream = context.contentResolver.openInputStream(android.net.Uri.parse(imageUri))
+                                val inputStream = context.contentResolver.openInputStream(imageUri.toUri())
                                 val bytes = inputStream?.readBytes()
                                 if (bytes != null) {
                                     val fileId = appwrite.uploadImage(
@@ -404,7 +410,8 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                                             bytes = bytes,
                                             filename = "group_$name.jpg",
                                             mimeType = "image/jpeg"
-                                        )
+                                        ),
+                                        AppwriteManager.BUCKET_GROUPS_ID
                                     )
                                     uploadedUrl = fileId // Guardamos solo el ID para que quepa en la DB
                                 }
@@ -621,7 +628,7 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                     members?.contains(currentUserId) == true
                 }.forEach { doc ->
                     val rawPhotoUrl = doc.data["photoUrl"] as? String
-                    val finalPhotoUrl = if (!rawPhotoUrl.isNullOrEmpty()) appwrite.getImageUrl(rawPhotoUrl, AppwriteManager.BUCKET_GROUPS_ID) else null
+                    val finalPhotoUrl = if (!rawPhotoUrl.isNullOrEmpty() && rawPhotoUrl != "null") appwrite.getImageUrl(rawPhotoUrl, AppwriteManager.BUCKET_GROUPS_ID) else null
                     
                     GroupIconCircle(
                         name = doc.data["name"] as? String ?: "Grupo",
@@ -772,7 +779,7 @@ fun ExploreGroupsContent(
             items(filteredGroups) { doc ->
                 val name = doc.data["name"] as? String ?: "Grupo"
                 val photoId = doc.data["photoUrl"] as? String
-                val photoUrl = if (!photoId.isNullOrEmpty()) appwrite.getImageUrl(photoId, AppwriteManager.BUCKET_GROUPS_ID) else null
+                val photoUrl = if (!photoId.isNullOrEmpty() && photoId != "null") appwrite.getImageUrl(photoId, AppwriteManager.BUCKET_GROUPS_ID) else null
                 val members = (doc.data["members"] as? List<*>)?.filterIsInstance<String>() ?: emptyList()
                 val isMember = members.contains(currentUserId)
 
@@ -968,17 +975,31 @@ fun CreateGroupDialog(onDismiss: () -> Unit, onCreate: (String, String?) -> Unit
 
 @Composable
 fun ChatBubble(msg: ChatMessage) {
+    val context = LocalContext.current
     val alignment = if (msg.isMe) Alignment.End else Alignment.Start
     val bubbleColor = if (msg.isMe) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
     val textColor = if (msg.isMe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+    
+    // Verificación de imagen: permitimos URLs de internet y URIs locales (para cuando estamos enviando)
+    val hasImage = !msg.imageUri.isNullOrBlank() && 
+                   msg.imageUri != "null" && 
+                   (msg.imageUri.startsWith("http") || msg.imageUri.startsWith("content") || msg.imageUri.startsWith("file"))
 
-    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = alignment) {
+    val isPlaceholder = msg.message == "📷 Foto"
+    val hasText = (msg.message.isNotBlank() && !isPlaceholder) || msg.isLocation
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+        horizontalAlignment = alignment
+    ) {
         if (!msg.isMe) {
             Text(
                 text = msg.sender,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(start = 8.dp, bottom = 2.dp)
+                modifier = Modifier.padding(start = 6.dp, bottom = 2.dp)
             )
         }
         
@@ -990,99 +1011,113 @@ fun ChatBubble(msg: ChatMessage) {
                 bottomEnd = if (msg.isMe) 4.dp else 16.dp
             ),
             colors = CardDefaults.cardColors(containerColor = bubbleColor),
-            modifier = Modifier.widthIn(max = 280.dp)
+            modifier = Modifier
+                .widthIn(max = 260.dp)
+                .animateContentSize()
         ) {
-            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                if (msg.imageUri != null) {
-                    AsyncImage(
-                        model = msg.imageUri,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 200.dp)
-                            .clip(RoundedCornerShape(8.dp)),
-                        contentScale = ContentScale.Crop
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-
-                if (msg.fileUri != null) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color.Black.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                            .padding(8.dp)
-                    ) {
-                        Icon(Icons.Default.Description, contentDescription = null, tint = textColor)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = msg.fileName ?: "Archivo",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = textColor,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+            Box(contentAlignment = Alignment.BottomEnd) {
+                Column {
+                    if (hasImage) {
+                        AsyncImage(
+                            model = msg.imageUri,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .width(260.dp)
+                                .heightIn(max = 300.dp)
+                                .clip(if (hasText) RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp) else RoundedCornerShape(16.dp)),
+                            contentScale = ContentScale.Crop
                         )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
 
-                if (msg.message.isNotBlank()) {
-                    if (msg.isLocation) {
-                        val context = LocalContext.current
+                    if (hasText) {
                         Column(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Color.Black.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                                .clickable {
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(msg.message))
-                                    context.startActivity(intent)
-                                }
-                                .padding(8.dp)
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                .then(if (hasImage) Modifier.fillMaxWidth() else Modifier)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Map, contentDescription = null, tint = textColor, modifier = Modifier.size(20.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Ubicación compartida", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = textColor)
+                            if (msg.isLocation) {
+                                Row(
+                                    modifier = Modifier
+                                        .background(Color.Black.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            val intent = Intent(Intent.ACTION_VIEW, msg.message.toUri())
+                                            context.startActivity(intent)
+                                        }
+                                        .padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Map, null, tint = textColor, modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Ubicación", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = textColor)
+                                }
+                            } else {
+                                Text(
+                                    text = msg.message,
+                                    color = textColor,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
                             }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text("Toca para ver en el mapa", style = MaterialTheme.typography.labelSmall, color = textColor.copy(alpha = 0.7f))
+                            
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.End,
+                                modifier = Modifier
+                                    .align(Alignment.End)
+                                    .padding(top = 2.dp)
+                            ) {
+                                Text(
+                                    text = msg.time,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = textColor.copy(alpha = 0.6f),
+                                    fontSize = 11.sp
+                                )
+                                if (msg.isMe) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    MessageStatusIcon(msg.status, textColor)
+                                }
+                            }
                         }
-                    } else {
-                        Text(text = msg.message, color = textColor)
                     }
                 }
-                
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.align(Alignment.End)
-                ) {
-                    Text(
-                        text = msg.time,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = textColor.copy(alpha = 0.7f)
-                    )
-                    
-                    if (msg.isMe) {
-                        Spacer(modifier = Modifier.width(4.dp))
-                        val (icon, tint) = when (msg.status) {
-                            MessageStatus.SENDING -> Icons.Default.Schedule to textColor.copy(alpha = 0.5f)
-                            MessageStatus.SENT -> Icons.Default.Check to textColor.copy(alpha = 0.7f)
-                            MessageStatus.READ -> Icons.Default.DoneAll to Color(0xFF00BFFF)
-                            MessageStatus.ERROR -> Icons.Default.Error to MaterialTheme.colorScheme.error
+
+                // Overlay del timestamp solo cuando es SOLO imagen (sin texto)
+                if (hasImage && !hasText) {
+                    Box(
+                        modifier = Modifier
+                            .padding(8.dp)
+                            .background(Color.Black.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(text = msg.time, color = Color.White, fontSize = 10.sp)
+                            if (msg.isMe) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                MessageStatusIcon(msg.status, Color.White)
+                            }
                         }
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = null,
-                            modifier = Modifier.size(12.dp),
-                            tint = tint
-                        )
                     }
                 }
             }
         }
     }
 }
+
+@Composable
+fun MessageStatusIcon(status: MessageStatus, baseColor: Color) {
+    val (icon, tint) = when (status) {
+        MessageStatus.SENDING -> Icons.Default.Schedule to baseColor.copy(alpha = 0.5f)
+        MessageStatus.SENT -> Icons.Default.Check to baseColor.copy(alpha = 0.7f)
+        MessageStatus.READ -> Icons.Default.DoneAll to Color(0xFF00BFFF)
+        MessageStatus.ERROR -> Icons.Default.Error to MaterialTheme.colorScheme.error
+    }
+    Icon(
+        imageVector = icon,
+        contentDescription = null,
+        modifier = Modifier.size(13.dp),
+        tint = tint
+    )
+}
+
 
 @Composable
 fun GroupMembersDialog(
@@ -1095,8 +1130,6 @@ fun GroupMembersDialog(
     var membersProfiles by remember { mutableStateOf<List<Document<Map<String, Any>>>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     
-    val gson = remember { Gson() }
-
     LaunchedEffect(memberIds) {
         membersProfiles = appwrite.getUsersProfiles(memberIds)
         isLoading = false

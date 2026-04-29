@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface RideDao {
-    @Query("SELECT * FROM rides ORDER BY date ASC")
+    @Query("SELECT * FROM rides ORDER BY date DESC")
     fun getAllRides(): Flow<List<RideEntity>>
 
     @Query("SELECT * FROM rides WHERE id = :id")
