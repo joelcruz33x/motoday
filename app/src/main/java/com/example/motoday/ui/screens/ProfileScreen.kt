@@ -1428,6 +1428,7 @@ fun PassportSection() {
 
 @Composable
 fun CityStamp(stamp: com.example.motoday.data.local.entities.PassportStampEntity) {
+    val context = LocalContext.current
     var isVisible by remember { mutableStateOf(false) }
     
     val scale by animateFloatAsState(
@@ -1445,6 +1446,11 @@ fun CityStamp(stamp: com.example.motoday.data.local.entities.PassportStampEntity
         animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy),
         label = "rotation"
     )
+
+    // Intentar cargar el recurso de imagen personalizado
+    val customResId = remember(stamp.iconResName) {
+        context.resources.getIdentifier(stamp.iconResName, "drawable", context.packageName)
+    }
 
     val stampConfig = when (stamp.locationName.lowercase(Locale.getDefault()).trim()) {
         "machala" -> StampStyle(Color(0xFFFFD700), Icons.Default.Agriculture, "MACHALA") 
@@ -1471,50 +1477,67 @@ fun CityStamp(stamp: com.example.motoday.data.local.entities.PassportStampEntity
     ) {
         Box(
             modifier = Modifier
-                .size(85.dp)
+                .size(90.dp)
                 .graphicsLayer(
                     scaleX = scale,
                     scaleY = scale,
                     alpha = alpha,
                     rotationZ = rotation
-                )
-                .clip(CircleShape)
-                .background(Color(0xFFFDF5E6))
-                .border(2.dp, stampConfig.color.copy(alpha = 0.4f), CircleShape)
-                .padding(8.dp),
+                ),
             contentAlignment = Alignment.Center
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    stampConfig.icon,
-                    contentDescription = null,
-                    tint = stampConfig.color.copy(alpha = 0.7f),
-                    modifier = Modifier.size(24.dp)
+            if (customResId != 0) {
+                // Sello con imagen real desbloqueada
+                androidx.compose.foundation.Image(
+                    painter = androidx.compose.ui.res.painterResource(id = customResId),
+                    contentDescription = stamp.locationName,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
                 )
-                Text(
-                    text = stampConfig.label,
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontWeight = FontWeight.ExtraBold,
-                        shadow = Shadow(color = Color.Black.copy(alpha = 0.15f), offset = Offset(2f, 2f), blurRadius = 3f)
-                    ),
-                    color = stampConfig.color.copy(alpha = 0.9f),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    maxLines = 1,
-                    fontSize = 9.sp
-                )
-                
-                val dateStr = try {
-                    SimpleDateFormat("dd/MM/yy", Locale.getDefault()).format(Date(stamp.date))
-                } catch (e: Exception) {
-                    "Reciente"
+            } else {
+                // Sello genérico (fallback)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape)
+                        .background(Color(0xFFFDF5E6))
+                        .border(2.dp, stampConfig.color.copy(alpha = 0.4f), CircleShape)
+                        .padding(8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            stampConfig.icon,
+                            contentDescription = null,
+                            tint = stampConfig.color.copy(alpha = 0.7f),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Text(
+                            text = stampConfig.label,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                shadow = Shadow(color = Color.Black.copy(alpha = 0.15f), offset = Offset(2f, 2f), blurRadius = 3f)
+                            ),
+                            color = stampConfig.color.copy(alpha = 0.9f),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            maxLines = 1,
+                            fontSize = 9.sp
+                        )
+                        
+                        val dateStr = try {
+                            SimpleDateFormat("dd/MM/yy", Locale.getDefault()).format(Date(stamp.date))
+                        } catch (e: Exception) {
+                            "Reciente"
+                        }
+                        
+                        Text(
+                            text = dateStr,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 8.sp,
+                            color = Color.Gray.copy(alpha = 0.8f)
+                        )
+                    }
                 }
-                
-                Text(
-                    text = dateStr,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontSize = 8.sp,
-                    color = Color.Gray.copy(alpha = 0.8f)
-                )
             }
         }
     }

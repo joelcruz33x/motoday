@@ -850,11 +850,20 @@ class AppwriteManager(context: Context) {
                         location = if (ride.title.isNotBlank()) ride.title else "Ruta Finalizada"
                     }
 
+                    // Normalizar nombre para buscar recurso de imagen (ej: "Santa Rosa" -> "stamp_santa_rosa")
+                    val normalizedLocation = location.lowercase(Locale.getDefault())
+                        .replace(" ", "_")
+                        .replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u")
+                        .replace("ñ", "n")
+                    
+                    val iconResName = "stamp_$normalizedLocation"
+
                     val newStamp = PassportStampEntity(
                         rideRemoteId = remoteId,
                         rideTitle = ride.title,
                         date = System.currentTimeMillis(),
-                        locationName = location
+                        locationName = location,
+                        iconResName = iconResName
                     )
 
                     db.passportDao().insertStamp(newStamp)
