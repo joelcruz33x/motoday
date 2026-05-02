@@ -6,7 +6,9 @@ sealed class Screen(val route: String) {
     object Login : Screen("login")
     object Register : Screen("register")
     object Explore : Screen("explore")
-    object Profile : Screen("profile")
+    object Profile : Screen("profile?userId={userId}") {
+        fun createRoute(userId: String? = null) = if (userId != null) "profile?userId=$userId" else "profile"
+    }
     
     // Sub-screens or modal screens
     object SOS : Screen("sos")
@@ -23,6 +25,10 @@ sealed class Screen(val route: String) {
     object GroupSettings : Screen("group_settings/{groupId}") {
         fun createRoute(groupId: String) = "group_settings/$groupId"
     }
+    object PrivateChat : Screen("private_chat/{userId}") {
+        fun createRoute(userId: String) = "private_chat/$userId"
+    }
+    object PrivateChatsList : Screen("private_chats_list")
     object RideDetail : Screen("ride_detail/{rideId}") {
         fun createRoute(rideId: Int) = "ride_detail/$rideId"
     }

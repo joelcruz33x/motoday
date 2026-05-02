@@ -41,6 +41,11 @@ import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.example.motoday.navigation.Screen
 import com.example.motoday.ui.components.BottomNavigationBar
+import com.example.motoday.ui.components.ChatBubble
+import com.example.motoday.ui.components.ChatMessage
+import com.example.motoday.ui.components.MessageStatus
+import com.example.motoday.ui.components.ChatInput
+import com.example.motoday.ui.components.isLocationMessage
 import kotlinx.coroutines.launch
 import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.data.remote.AuthManager
@@ -48,26 +53,10 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import io.appwrite.exceptions.AppwriteException
 import io.appwrite.models.Document
 import io.appwrite.services.Realtime
 
-
-enum class MessageStatus {
-    SENDING, SENT, READ, ERROR
-}
-
-data class ChatMessage(
-    val sender: String,
-    val message: String,
-    val time: String,
-    val isMe: Boolean = false,
-    val imageUri: String? = null,
-    val fileUri: String? = null,
-    val fileName: String? = null,
-    val isLocation: Boolean = false,
-    val id: String = UUID.randomUUID().toString(),
-    val status: MessageStatus = MessageStatus.SENT
-)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -128,10 +117,9 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                 val senderId = doc.data["senderId"] as? String ?: ""
                 val ts = doc.data["timestamp"] as? Number ?: 0L
                 
-                // Extracción segura: Maneja si es String o List
+                // Extracción de imagen
                 val rawVal = doc.data["imageUrl"]
                 val rawImageUrl = if (rawVal is List<*>) rawVal.firstOrNull()?.toString() else rawVal?.toString()
-                
                 val finalImageUrl = if (!rawImageUrl.isNullOrBlank() && 
                     rawImageUrl != "null" && 
                     !rawImageUrl.contains("[") && 
@@ -139,10 +127,17 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                     appwrite.getImageUrl(rawImageUrl, AppwriteManager.BUCKET_GROUPS_ID)
                 } else null
 
+                // Extracción de documento
+                val rawFileId = doc.data["fileId"]
+                val fileId = if (rawFileId is List<*>) rawFileId.firstOrNull()?.toString() else rawFileId?.toString()
+                val fileName = doc.data["fileName"] as? String
+                val finalFileUrl = if (!fileId.isNullOrBlank() && fileId != "null") {
+                    appwrite.getFileUrl(fileId, AppwriteManager.BUCKET_GROUPS_ID)
+                } else null
+
                 val text = doc.data["text"] as? String ?: ""
-                val isLocation = text.contains("google.com/maps") || 
-                               text.contains("maps.app.goo.gl") || 
-                               text.contains("waze.com")
+                val isRead = doc.data["read"] as? Boolean ?: false
+                val isLocation = isLocationMessage(text)
 
                 chatMessages.add(ChatMessage(
                     id = doc.id,
@@ -151,8 +146,18 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                     time = sdf.format(Date(ts.toLong())),
                     isMe = senderId == currentUserId,
                     imageUri = finalImageUrl,
-                    isLocation = isLocation
+                    fileUri = finalFileUrl,
+                    fileName = fileName,
+                    isLocation = isLocation,
+                    status = if (isRead) MessageStatus.READ else MessageStatus.SENT
                 ))
+
+                // Marcar como leído si no es mío
+                if (senderId != currentUserId && !isRead) {
+                    scope.launch {
+                        appwrite.markMessageAsRead(doc.id)
+                    }
+                }
             }
             if (chatMessages.isNotEmpty()) {
                 listState.scrollToItem(chatMessages.size - 1)
@@ -187,27 +192,55 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                             rawImageUrl.length > 5) {
                             appwrite.getImageUrl(rawImageUrl, AppwriteManager.BUCKET_GROUPS_ID)
                         } else null
+
+                        val rawFileVal = payload["fileId"]
+                        val fileId = if (rawFileVal is List<*>) rawFileVal.firstOrNull()?.toString() else rawFileVal?.toString()
+                        val fileName = payload["fileName"] as? String
+                        val finalFileUrl = if (!fileId.isNullOrBlank() && fileId != "null") {
+                            appwrite.getFileUrl(fileId, AppwriteManager.BUCKET_GROUPS_ID)
+                        } else null
                         
                         val text = payload["text"] as? String ?: ""
-                        val isLocation = text.contains("google.com/maps") || 
-                                       text.contains("maps.app.goo.gl") || 
-                                       text.contains("waze.com")
+                        val isRead = payload["read"] as? Boolean ?: false
+                        val isLocation = isLocationMessage(text)
 
+                        val msgId = (payload["\$id"] ?: payload["id"])?.toString() ?: UUID.randomUUID().toString()
                         val newMessage = ChatMessage(
-                            id = payload["\$id"] as? String ?: UUID.randomUUID().toString(),
+                            id = msgId,
                             sender = payload["senderName"] as? String ?: "Usuario",
                             message = text,
                             time = sdf.format(Date(ts)),
                             isMe = false,
                             imageUri = finalImageUrl,
-                            isLocation = isLocation
+                            fileUri = finalFileUrl,
+                            fileName = fileName,
+                            isLocation = isLocation,
+                            status = if (isRead) MessageStatus.READ else MessageStatus.SENT
                         )
                         
                         scope.launch {
-                            // Verificar que no esté ya en la lista (por si acaso)
-                            if (chatMessages.none { it.id == newMessage.id }) {
+                            val existingIndex = chatMessages.indexOfFirst { it.id == newMessage.id }
+                            if (existingIndex != -1) {
+                                chatMessages[existingIndex] = newMessage
+                            } else {
                                 chatMessages.add(newMessage)
                                 listState.animateScrollToItem(chatMessages.size - 1)
+                                
+                                if (!isRead) {
+                                    appwrite.markMessageAsRead(msgId)
+                                }
+                            }
+                        }
+                    } else {
+                        // Mensaje propio: detectar si cambió a READ
+                        val isRead = payload["read"] as? Boolean ?: false
+                        val msgId = payload["\$id"] as? String ?: ""
+                        if (isRead && msgId.isNotEmpty()) {
+                            scope.launch {
+                                val index = chatMessages.indexOfFirst { it.id == msgId }
+                                if (index != -1 && chatMessages[index].status != MessageStatus.READ) {
+                                    chatMessages[index] = chatMessages[index].copy(status = MessageStatus.READ)
+                                }
                             }
                         }
                     }
@@ -269,10 +302,21 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                     listState.animateScrollToItem(chatMessages.size - 1)
 
                     // 2. Subir imagen a Appwrite
+                    var fileSizeText = ""
                     try {
                         val inputStream = context.contentResolver.openInputStream(uri)
                         val bytes = inputStream?.readBytes()
                         if (bytes != null) {
+                            val fileSizeMB = bytes.size / (1024.0 * 1024.0)
+                            fileSizeText = String.format("%.1f MB", fileSizeMB)
+                            
+                            if (bytes.size > 10 * 1024 * 1024) {
+                                Toast.makeText(context, "La imagen ($fileSizeText) supera el límite de 10MB", Toast.LENGTH_LONG).show()
+                                val index = chatMessages.indexOfFirst { it.id == tempMsg.id }
+                                if (index != -1) chatMessages[index] = chatMessages[index].copy(status = MessageStatus.ERROR)
+                                return@launch
+                            }
+
                             val fileId = appwrite.uploadImage(
                                 io.appwrite.models.InputFile.fromBytes(
                                     bytes = bytes,
@@ -284,7 +328,7 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                             
                             // 3. Enviar mensaje con el ID de la imagen
                             val success = appwrite.sendMessage(
-                                groupId = groupId,
+                                conversationId = groupId,
                                 senderId = userId,
                                 senderName = currentUserName,
                                 text = "",
@@ -305,6 +349,17 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                             }
                         }
                     } catch (e: Exception) {
+                        val isSizeError = e is AppwriteException && (
+                            e.message?.contains("large", true) == true || 
+                            e.response?.contains("too_large") == true || 
+                            e.code == 400 ||
+                            e.message?.contains("not found", true) == true
+                        )
+                        if (isSizeError) {
+                            Toast.makeText(context, "La imagen ($fileSizeText) es demasiado grande o el servidor rechazó la subida", Toast.LENGTH_LONG).show()
+                        } else {
+                            Toast.makeText(context, "Error al enviar imagen: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
                         val index = chatMessages.indexOfFirst { it.id == tempMsg.id }
                         if (index != -1) chatMessages[index] = chatMessages[index].copy(status = MessageStatus.ERROR)
                     }
@@ -317,10 +372,94 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri != null) {
-            chatMessages.add(ChatMessage("Yo", "", "Ahora", true, fileUri = uri.toString(), fileName = "Documento.pdf"))
-            scope.launch { listState.animateScrollToItem(chatMessages.size - 1) }
+            val groupId = selectedGroupId
+            val userId = currentUserId
+            if (groupId != null && userId != null) {
+                scope.launch {
+                    val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+                    val originalFileName = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        cursor.moveToFirst()
+                        cursor.getString(nameIndex)
+                    } ?: "Documento"
+
+                    val tempMsg = ChatMessage(
+                        sender = currentUserName,
+                        message = "",
+                        time = sdf.format(Date()),
+                        isMe = true,
+                        fileUri = uri.toString(),
+                        fileName = originalFileName,
+                        status = MessageStatus.SENDING
+                    )
+                    chatMessages.add(tempMsg)
+                    listState.animateScrollToItem(chatMessages.size - 1)
+
+                    var fileSizeText = ""
+                    try {
+                        val inputStream = context.contentResolver.openInputStream(uri)
+                        val bytes = inputStream?.readBytes()
+                        if (bytes != null) {
+                            val fileSizeMB = bytes.size / (1024.0 * 1024.0)
+                            fileSizeText = String.format("%.1f MB", fileSizeMB)
+                            
+                            if (bytes.size > 10 * 1024 * 1024) {
+                                Toast.makeText(context, "El archivo ($fileSizeText) supera el límite de 10MB", Toast.LENGTH_LONG).show()
+                                val index = chatMessages.indexOfFirst { it.id == tempMsg.id }
+                                if (index != -1) chatMessages[index] = chatMessages[index].copy(status = MessageStatus.ERROR)
+                                return@launch
+                            }
+
+                            val fileId = appwrite.uploadImage(
+                                io.appwrite.models.InputFile.fromBytes(
+                                    bytes = bytes,
+                                    filename = originalFileName,
+                                    mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+                                ),
+                                AppwriteManager.BUCKET_GROUPS_ID
+                            )
+                            
+                            val success = appwrite.sendMessage(
+                                conversationId = groupId,
+                                senderId = userId,
+                                senderName = currentUserName,
+                                text = "",
+                                fileId = fileId,
+                                fileName = originalFileName
+                            )
+                            
+                            val index = chatMessages.indexOfFirst { it.id == tempMsg.id }
+                            if (index != -1) {
+                                if (success != null) {
+                                    chatMessages[index] = chatMessages[index].copy(
+                                        status = MessageStatus.SENT,
+                                        id = success
+                                    )
+                                } else {
+                                    chatMessages[index] = chatMessages[index].copy(status = MessageStatus.ERROR)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        val isSizeError = e is AppwriteException && (
+                            e.message?.contains("large", true) == true || 
+                            e.response?.contains("too_large") == true || 
+                            e.code == 400 ||
+                            e.message?.contains("not found", true) == true
+                        )
+                        if (isSizeError) {
+                            Toast.makeText(context, "El archivo ($fileSizeText) supera el límite de tamaño permitido", Toast.LENGTH_LONG).show()
+                        } else {
+                            Toast.makeText(context, "Error al enviar archivo: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                        val index = chatMessages.indexOfFirst { it.id == tempMsg.id }
+                        if (index != -1) chatMessages[index] = chatMessages[index].copy(status = MessageStatus.ERROR)
+                    }
+                }
+            }
         }
     }
+
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -365,7 +504,7 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                             listState.animateScrollToItem(chatMessages.size - 1)
 
                             val success = appwrite.sendMessage(
-                                groupId = groupId,
+                                conversationId = groupId,
                                 senderId = userId,
                                 senderName = currentUserName,
                                 text = mapsLink
@@ -696,9 +835,7 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                                 messageText = ""
                                 val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
                                 
-                                val isLocation = textToSend.contains("google.com/maps") || 
-                                               textToSend.contains("maps.app.goo.gl") || 
-                                               textToSend.contains("waze.com")
+                                val isLocation = isLocationMessage(textToSend)
 
                                 // 1. Crear mensaje temporal con estado SENDING
                                 val tempMsg = ChatMessage(
@@ -715,7 +852,7 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                                 // 2. Enviar a Appwrite
                                 scope.launch {
                                     val success = appwrite.sendMessage(
-                                        groupId = groupId,
+                                        conversationId = groupId,
                                         senderId = userId,
                                         senderName = currentUserName,
                                         text = textToSend
@@ -727,6 +864,7 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                                         if (success != null) {
                                             chatMessages[index] = chatMessages[index].copy(
                                                 status = MessageStatus.SENT,
+                                                id = success,
                                                 time = sdf.format(Date())
                                             )
                                         } else {
@@ -858,60 +996,14 @@ fun ChatContent(
             items(messages) { msg -> ChatBubble(msg) }
         }
         
-        Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.padding(8.dp).navigationBarsPadding().imePadding(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                var showAttachMenu by remember { mutableStateOf(false) }
-                Box {
-                    IconButton(onClick = { showAttachMenu = true }) { 
-                        Icon(Icons.Outlined.AddCircleOutline, contentDescription = "Adjuntar", tint = MaterialTheme.colorScheme.primary) 
-                    }
-                    DropdownMenu(
-                        expanded = showAttachMenu,
-                        onDismissRequest = { showAttachMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Imagen") },
-                            onClick = {
-                                showAttachMenu = false
-                                onImageAttach()
-                            },
-                            leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Documento") },
-                            onClick = {
-                                showAttachMenu = false
-                                onFileAttach()
-                            },
-                            leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Ubicación") },
-                            onClick = {
-                                showAttachMenu = false
-                                onLocationAttach()
-                            },
-                            leadingIcon = { Icon(Icons.Default.LocationOn, contentDescription = null) }
-                        )
-                    }
-                }
-                
-                TextField(
-                    value = messageText,
-                    onValueChange = onMessageChange,
-                    placeholder = { Text("Escribe un mensaje...") },
-                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(24.dp)),
-                    colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent),
-                    maxLines = 4
-                )
-                if (messageText.isNotBlank()) {
-                    IconButton(onClick = onSend) { Icon(Icons.Default.Send, contentDescription = "Enviar", tint = MaterialTheme.colorScheme.primary) }
-                }
-            }
-        }
+        ChatInput(
+            messageText = messageText,
+            onMessageChange = onMessageChange,
+            onSend = onSend,
+            onImageAttach = onImageAttach,
+            onFileAttach = onFileAttach,
+            onLocationAttach = onLocationAttach
+        )
     }
 }
 
@@ -972,152 +1064,6 @@ fun CreateGroupDialog(onDismiss: () -> Unit, onCreate: (String, String?) -> Unit
         }
     )
 }
-
-@Composable
-fun ChatBubble(msg: ChatMessage) {
-    val context = LocalContext.current
-    val alignment = if (msg.isMe) Alignment.End else Alignment.Start
-    val bubbleColor = if (msg.isMe) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
-    val textColor = if (msg.isMe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-    
-    // Verificación de imagen: permitimos URLs de internet y URIs locales (para cuando estamos enviando)
-    val hasImage = !msg.imageUri.isNullOrBlank() && 
-                   msg.imageUri != "null" && 
-                   (msg.imageUri.startsWith("http") || msg.imageUri.startsWith("content") || msg.imageUri.startsWith("file"))
-
-    val isPlaceholder = msg.message == "📷 Foto"
-    val hasText = (msg.message.isNotBlank() && !isPlaceholder) || msg.isLocation
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-        horizontalAlignment = alignment
-    ) {
-        if (!msg.isMe) {
-            Text(
-                text = msg.sender,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(start = 6.dp, bottom = 2.dp)
-            )
-        }
-        
-        Card(
-            shape = RoundedCornerShape(
-                topStart = 16.dp,
-                topEnd = 16.dp,
-                bottomStart = if (msg.isMe) 16.dp else 4.dp,
-                bottomEnd = if (msg.isMe) 4.dp else 16.dp
-            ),
-            colors = CardDefaults.cardColors(containerColor = bubbleColor),
-            modifier = Modifier
-                .widthIn(max = 260.dp)
-                .animateContentSize()
-        ) {
-            Box(contentAlignment = Alignment.BottomEnd) {
-                Column {
-                    if (hasImage) {
-                        AsyncImage(
-                            model = msg.imageUri,
-                            contentDescription = null,
-                            modifier = Modifier
-                                .width(260.dp)
-                                .heightIn(max = 300.dp)
-                                .clip(if (hasText) RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp) else RoundedCornerShape(16.dp)),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
-
-                    if (hasText) {
-                        Column(
-                            modifier = Modifier
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                                .then(if (hasImage) Modifier.fillMaxWidth() else Modifier)
-                        ) {
-                            if (msg.isLocation) {
-                                Row(
-                                    modifier = Modifier
-                                        .background(Color.Black.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                                        .clickable {
-                                            val intent = Intent(Intent.ACTION_VIEW, msg.message.toUri())
-                                            context.startActivity(intent)
-                                        }
-                                        .padding(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.Default.Map, null, tint = textColor, modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Ubicación", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = textColor)
-                                }
-                            } else {
-                                Text(
-                                    text = msg.message,
-                                    color = textColor,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            }
-                            
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.End,
-                                modifier = Modifier
-                                    .align(Alignment.End)
-                                    .padding(top = 2.dp)
-                            ) {
-                                Text(
-                                    text = msg.time,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = textColor.copy(alpha = 0.6f),
-                                    fontSize = 11.sp
-                                )
-                                if (msg.isMe) {
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    MessageStatusIcon(msg.status, textColor)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Overlay del timestamp solo cuando es SOLO imagen (sin texto)
-                if (hasImage && !hasText) {
-                    Box(
-                        modifier = Modifier
-                            .padding(8.dp)
-                            .background(Color.Black.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(text = msg.time, color = Color.White, fontSize = 10.sp)
-                            if (msg.isMe) {
-                                Spacer(modifier = Modifier.width(4.dp))
-                                MessageStatusIcon(msg.status, Color.White)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun MessageStatusIcon(status: MessageStatus, baseColor: Color) {
-    val (icon, tint) = when (status) {
-        MessageStatus.SENDING -> Icons.Default.Schedule to baseColor.copy(alpha = 0.5f)
-        MessageStatus.SENT -> Icons.Default.Check to baseColor.copy(alpha = 0.7f)
-        MessageStatus.READ -> Icons.Default.DoneAll to Color(0xFF00BFFF)
-        MessageStatus.ERROR -> Icons.Default.Error to MaterialTheme.colorScheme.error
-    }
-    Icon(
-        imageVector = icon,
-        contentDescription = null,
-        modifier = Modifier.size(13.dp),
-        tint = tint
-    )
-}
-
 
 @Composable
 fun GroupMembersDialog(

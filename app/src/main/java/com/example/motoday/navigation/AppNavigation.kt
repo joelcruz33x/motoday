@@ -78,8 +78,16 @@ fun AppNavigation(sharedText: String? = null) {
                 val sharedTextParam = backStackEntry.arguments?.getString("sharedText")
                 GroupsScreen(navController, sharedText = sharedTextParam)
             }
-            composable(Screen.Profile.route) {
-                ProfileScreen(navController)
+            composable(
+                route = Screen.Profile.route,
+                arguments = listOf(navArgument("userId") { 
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                })
+            ) { backStackEntry ->
+                val userId = backStackEntry.arguments?.getString("userId")
+                ProfileScreen(navController, userId)
             }
             composable(Screen.SOS.route) {
                 SOSScreen(navController)
@@ -112,6 +120,16 @@ fun AppNavigation(sharedText: String? = null) {
             ) { backStackEntry ->
                 val rideId = backStackEntry.arguments?.getInt("rideId") ?: 0
                 RideDetailScreen(navController, rideId)
+            }
+            composable(
+                route = Screen.PrivateChat.route,
+                arguments = listOf(navArgument("userId") { type = NavType.StringType })
+            ) { backStackEntry ->
+                val userId = backStackEntry.arguments?.getString("userId") ?: ""
+                PrivateChatScreen(navController, userId)
+            }
+            composable(Screen.PrivateChatsList.route) {
+                PrivateChatsListScreen(navController)
             }
         }
     }

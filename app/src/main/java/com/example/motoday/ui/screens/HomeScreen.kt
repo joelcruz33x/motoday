@@ -164,6 +164,11 @@ fun HomeScreen(navController: NavController) {
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text("MotoDay", fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp) },
+                navigationIcon = {
+                    IconButton(onClick = { navController.navigate(Screen.PrivateChatsList.route) }) {
+                        Icon(Icons.Default.Email, contentDescription = "Chats", tint = MaterialTheme.colorScheme.primary)
+                    }
+                },
                 actions = {
                     IconButton(onClick = { navController.navigate(Screen.Store.route) }) {
                         Icon(Icons.Default.ShoppingCart, contentDescription = "Tienda", tint = MaterialTheme.colorScheme.primary)
@@ -244,6 +249,12 @@ fun HomeScreen(navController: NavController) {
                                 scope.launch {
                                     appwrite.toggleLike(post.id, currentUserId, likes)
                                     loadData(showLoading = false) 
+                                }
+                            },
+                            onUserClick = {
+                                val userId = data["userId"] as? String
+                                if (userId != null) {
+                                    navController.navigate(Screen.Profile.createRoute(userId))
                                 }
                             },
                             onShareClick = {
@@ -414,7 +425,8 @@ fun PostItem(
     likesCount: Int,
     isLiked: Boolean,
     onLikeClick: () -> Unit,
-    onShareClick: () -> Unit
+    onShareClick: () -> Unit,
+    onUserClick: () -> Unit = {}
 ) {
     var localIsLiked by remember(isLiked) { mutableStateOf(isLiked) }
     var localLikesCount by remember(likesCount) { mutableStateOf(likesCount) }
@@ -444,7 +456,10 @@ fun PostItem(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.clickable { onUserClick() }
+            ) {
                 Box(modifier = Modifier.size(42.dp).clip(CircleShape).background(Color.LightGray)) {
                     if (!userProfilePic.isNullOrEmpty()) {
                         AsyncImage(model = userProfilePic, contentDescription = null, contentScale = ContentScale.Crop)

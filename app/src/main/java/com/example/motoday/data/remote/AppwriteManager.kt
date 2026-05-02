@@ -554,32 +554,48 @@ class AppwriteManager(context: Context) {
         }
     }
 
-    // --- CHAT ---
-    suspend fun getGroupMessages(groupId: String): List<Document<Map<String, Any>>> {
+    // --- CHAT (GRUPOS Y PRIVADOS) ---
+    suspend fun getMessages(conversationId: String): List<Document<Map<String, Any>>> {
         return try {
             databases.listDocuments(
                 databaseId = DATABASE_ID,
                 collectionId = COLLECTION_MESSAGES_ID,
-                queries = listOf(Query.equal("groupId", groupId), Query.orderAsc("timestamp"), Query.limit(100))
+                queries = listOf(Query.equal("groupId", conversationId), Query.orderAsc("timestamp"), Query.limit(100))
             ).documents
         } catch (e: Exception) {
             emptyList()
         }
     }
 
-    suspend fun sendMessage(groupId: String, senderId: String, senderName: String, text: String, imageUrl: String? = null): String? {
-        val finalBoxText = if (text.isBlank() && !imageUrl.isNullOrBlank()) "📷 Foto" else text
+    suspend fun getGroupMessages(groupId: String) = getMessages(groupId)
+
+    suspend fun sendMessage(
+        conversationId: String,
+        senderId: String,
+        senderName: String,
+        text: String,
+        imageUrl: String? = null,
+        fileId: String? = null,
+        fileName: String? = null
+    ): String? {
+        val finalBoxText = when {
+            text.isNotBlank() -> text
+            !imageUrl.isNullOrBlank() -> "📷 Foto"
+            !fileId.isNullOrBlank() -> "📄 Documento"
+            else -> ""
+        }
         val data = mutableMapOf<String, Any>(
-            "groupId" to groupId,
+            "groupId" to conversationId,
             "senderId" to senderId,
             "senderName" to senderName,
             "text" to finalBoxText,
-            "timestamp" to System.currentTimeMillis()
+            "timestamp" to System.currentTimeMillis(),
+            "read" to false
         )
         
-        if (!imageUrl.isNullOrBlank()) {
-            data["imageUrl"] = imageUrl
-        }
+        if (!imageUrl.isNullOrBlank()) data["imageUrl"] = imageUrl
+        if (!fileId.isNullOrBlank()) data["fileId"] = fileId
+        if (!fileName.isNullOrBlank()) data["fileName"] = fileName
 
         return try {
             val response = databases.createDocument(
@@ -592,6 +608,21 @@ class AppwriteManager(context: Context) {
         } catch (e: Exception) {
             Log.e("AppwriteManager", "Error sendMessage: ${e.message}")
             null
+        }
+    }
+
+    suspend fun markMessageAsRead(messageId: String): Boolean {
+        return try {
+            databases.updateDocument(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_MESSAGES_ID,
+                documentId = messageId,
+                data = mapOf("read" to true)
+            )
+            true
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error markMessageAsRead: ${e.message}")
+            false
         }
     }
 
@@ -1098,6 +1129,12 @@ class AppwriteManager(context: Context) {
         // Optimizamos la carga añadiendo parámetros de previsualización (view) de Appwrite
         // width=1080 para calidad HD pero optimizada para móvil, quality=80 para ahorrar ancho de banda
         return "https://nyc.cloud.appwrite.io/v1/storage/buckets/$bucketId/files/$fileId/view?project=69e6836b00267f431c20&width=1080&quality=80"
+    }
+
+    fun getFileUrl(fileId: String, bucketId: String = BUCKET_GROUPS_ID): String {
+        if (fileId.isBlank() || fileId == "null") return ""
+        if (fileId.startsWith("http")) return fileId
+        return "https://nyc.cloud.appwrite.io/v1/storage/buckets/$bucketId/files/$fileId/download?project=69e6836b00267f431c20"
     }
 
     fun extractFileIdFromUrl(url: String?): String? {
