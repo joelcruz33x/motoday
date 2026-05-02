@@ -20,6 +20,7 @@ import kotlinx.coroutines.withContext
 import com.example.motoday.data.local.AppDatabase
 import com.example.motoday.data.local.entities.RideEntity
 import com.example.motoday.data.local.entities.PassportStampEntity
+import com.example.motoday.data.local.entities.UserEntity
 
 class AppwriteManager(context: Context) {
     val client = Client(context)
@@ -87,6 +88,7 @@ class AppwriteManager(context: Context) {
         bikePic: String? = null,
         totalKm: Int? = null,
         rides: Int? = null,
+        octanos: Int? = null,
         isIndependent: Boolean? = null
     ): Boolean {
         val data = mutableMapOf<String, Any>(
@@ -101,6 +103,7 @@ class AppwriteManager(context: Context) {
         if (bikePic != null) data["bikePic"] = bikePic
         if (totalKm != null) data["totalKm"] = totalKm
         if (rides != null) data["rides"] = rides
+        if (octanos != null) data["octanos"] = octanos
         if (isIndependent != null) data["isIndependent"] = isIndependent
 
         return try {
@@ -212,7 +215,8 @@ class AppwriteManager(context: Context) {
                     "imageUrl" to imageUrls, 
                     "caption" to caption,
                     "timestamp" to timestamp,
-                    "likes" to emptyList<String>()
+                    "likes" to emptyList<String>(),
+                    "octanos" to 0
                 )
             )
             response.id
@@ -790,27 +794,73 @@ class AppwriteManager(context: Context) {
                 } else 50
 
                 // 2. Actualizar Perfil Local y Nube
-                val currentProfile = db.userDao().getUserProfileOnce()
-                if (currentProfile != null) {
-                    val newRides = currentProfile.ridesCompleted + 1
-                    val newKm = currentProfile.totalKilometers + distanceKm
+                var currentProfile = db.userDao().getUserProfileOnce()
+                
+                // ENDURECIMIENTO: Si el perfil local no existe (posible tras migración destructiva), 
+                // intentamos recuperarlo de Appwrite antes de procesar los nuevos puntos.
+                if (currentProfile == null) {
+                    Log.d("AppwriteManager", "Perfil local no encontrado en processRideCompletion. Intentando recuperar de la nube...")
+                    val remoteProfile = getUserProfile(userId)
+                    if (remoteProfile != null) {
+                        val data = remoteProfile.data
+                        currentProfile = UserEntity(
+                            id = 1,
+                            name = (data["name"] as? String) ?: "Motero",
+                            level = (data["level"] as? String) ?: "Novato",
+                            bikeModel = (data["bikeModel"] as? String) ?: "Sin moto",
+                            bikeSpecs = (data["bikeSpecs"] as? String) ?: "",
+                            bikeYear = (data["bikeYear"] as? String) ?: "",
+                            bikeColor = (data["bikeColor"] as? String) ?: "",
+                            totalKilometers = (data["totalKm"] as? Number)?.toInt() ?: ((data["totalKilometers"] as? Number)?.toInt() ?: 0),
+                            ridesCompleted = (data["rides"] as? Number)?.toInt() ?: ((data["ridesCompleted"] as? Number)?.toInt() ?: 0),
+                            octanos = (data["octanos"] as? Number)?.toInt() ?: 0,
+                            isIndependent = when(val ind = data["isIndependent"]) {
+                                is Boolean -> ind
+                                is Number -> ind.toInt() == 1
+                                is String -> ind.lowercase() == "true"
+                                else -> true
+                            }
+                        )
+                        val profileToSave = currentProfile
+                        db.userDao().insertOrUpdate(profileToSave)
+                        Log.d("AppwriteManager", "Perfil recuperado exitosamente para $userId")
+                    }
+                }
 
-                    db.userDao().insertOrUpdate(currentProfile.copy(
+                if (currentProfile != null) {
+                    val profileToUse = currentProfile
+                    val newRides = profileToUse.ridesCompleted + 1
+                    val newKm = profileToUse.totalKilometers + distanceKm
+
+                    // Cálculo de Octanos robusto
+                    val multiplier = when (profileToUse.level.lowercase(Locale.getDefault()).trim()) {
+                        "novato" -> 0.10
+                        "intermedio" -> 0.12
+                        "experto" -> 0.15
+                        else -> 0.10
+                    }
+                    val gainedOctanos = (distanceKm * multiplier).toInt()
+                    val newOctanos = profileToUse.octanos + gainedOctanos
+
+                    val updatedProfile = profileToUse.copy(
                         ridesCompleted = newRides,
-                        totalKilometers = newKm
-                    ))
+                        totalKilometers = newKm,
+                        octanos = newOctanos
+                    )
+                    db.userDao().insertOrUpdate(updatedProfile)
 
                     updateUserProfile(
                         userId = userId,
-                        name = currentProfile.name,
-                        level = currentProfile.level,
-                        bikeModel = currentProfile.bikeModel,
-                        bikeSpecs = currentProfile.bikeSpecs,
-                        bikeYear = currentProfile.bikeYear,
-                        bikeColor = currentProfile.bikeColor,
+                        name = updatedProfile.name,
+                        level = updatedProfile.level,
+                        bikeModel = updatedProfile.bikeModel,
+                        bikeSpecs = updatedProfile.bikeSpecs,
+                        bikeYear = updatedProfile.bikeYear,
+                        bikeColor = updatedProfile.bikeColor,
                         totalKm = newKm,
                         rides = newRides,
-                        isIndependent = currentProfile.isIndependent
+                        octanos = newOctanos,
+                        isIndependent = updatedProfile.isIndependent
                     )
                 }
 

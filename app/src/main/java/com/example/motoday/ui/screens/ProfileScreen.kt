@@ -100,14 +100,14 @@ fun ProfileScreen(navController: NavController) {
                     }
 
                     val newUser = (localUser ?: UserEntity(id = 1, name = "Motero", level = "Novato", bikeModel = "Sin moto", bikeSpecs = "", bikeYear = "", bikeColor = "")).copy(
-                        name = data["name"] as? String ?: (localUser?.name ?: "Motero"),
-                        level = data["level"] as? String ?: (localUser?.level ?: "Novato"),
-                        clubName = data["clubName"] as? String ?: (localUser?.clubName ?: "Independiente"),
-                        clubRole = data["clubRole"] as? String ?: (localUser?.clubRole),
-                        bikeModel = data["bikeModel"] as? String ?: (localUser?.bikeModel ?: "Sin moto"),
-                        bikeSpecs = data["bikeSpecs"] as? String ?: (localUser?.bikeSpecs ?: ""),
-                        bikeYear = data["bikeYear"] as? String ?: (localUser?.bikeYear ?: ""),
-                        bikeColor = data["bikeColor"] as? String ?: (localUser?.bikeColor ?: ""),
+                        name = (data["name"] as? String) ?: (localUser?.name ?: "Motero"),
+                        level = (data["level"] as? String) ?: (localUser?.level ?: "Novato"),
+                        clubName = (data["clubName"] as? String) ?: (localUser?.clubName ?: "Independiente"),
+                        clubRole = (data["clubRole"] as? String) ?: (localUser?.clubRole),
+                        bikeModel = (data["bikeModel"] as? String) ?: (localUser?.bikeModel ?: "Sin moto"),
+                        bikeSpecs = (data["bikeSpecs"] as? String) ?: (localUser?.bikeSpecs ?: ""),
+                        bikeYear = (data["bikeYear"] as? String) ?: (localUser?.bikeYear ?: ""),
+                        bikeColor = (data["bikeColor"] as? String) ?: (localUser?.bikeColor ?: ""),
                         profilePictureUri = updatedProfilePic,
                         bikePictureUri = updatedBikePic,
                         isIndependent = when(val ind = data["isIndependent"]) {
@@ -116,17 +116,22 @@ fun ProfileScreen(navController: NavController) {
                             is String -> ind.lowercase() == "true"
                             else -> localUser?.isIndependent ?: true
                         },
-                        totalKilometers = (data["totalKm"] as? Number)?.toInt() ?: (localUser?.totalKilometers ?: 0),
-                        ridesCompleted = (data["rides"] as? Number)?.toInt() ?: (localUser?.ridesCompleted ?: 0)
+                        totalKilometers = (data["totalKm"] as? Number)?.toInt() 
+                            ?: (data["totalKilometers"] as? Number)?.toInt() 
+                            ?: (localUser?.totalKilometers ?: 0),
+                        ridesCompleted = (data["rides"] as? Number)?.toInt() 
+                            ?: (data["ridesCompleted"] as? Number)?.toInt() 
+                            ?: (localUser?.ridesCompleted ?: 0),
+                        octanos = (data["octanos"] as? Number)?.toInt() ?: (localUser?.octanos ?: 0)
                     )
                     db.userDao().insertOrUpdate(newUser)
                 } else if (db.userDao().getUserProfileOnce() == null) {
-                    db.userDao().insertOrUpdate(UserEntity(id = 1, name = "Motero", level = "Novato", bikeModel = "Sin moto", bikeSpecs = "", bikeYear = "", bikeColor = ""))
+                    db.userDao().insertOrUpdate(UserEntity(id = 1, name = "Motero", level = "Novato", bikeModel = "Sin moto", bikeSpecs = "", bikeYear = "", bikeColor = "", octanos = 0))
                 }
             } catch (e: Exception) {
                 Log.e("ProfileScreen", "Error sincronizando perfil: ${e.message}")
                 if (db.userDao().getUserProfileOnce() == null) {
-                    db.userDao().insertOrUpdate(UserEntity(id = 1, name = "Motero (Offline)", level = "Novato", bikeModel = "Sin moto", bikeSpecs = "", bikeYear = "", bikeColor = ""))
+                    db.userDao().insertOrUpdate(UserEntity(id = 1, name = "Motero (Offline)", level = "Novato", bikeModel = "Sin moto", bikeSpecs = "", bikeYear = "", bikeColor = "", octanos = 0))
                 }
             }
 

@@ -118,7 +118,8 @@ fun LoginScreen(navController: NavController) {
                                     bikeStatus = remoteProfile.data["bikeStatus"] as? String ?: "Disponible",
                                     profilePictureUri = remoteProfile.data["profilePic"] as? String,
                                     totalKilometers = (remoteProfile.data["totalKm"] as? Number)?.toInt() ?: 0,
-                                    ridesCompleted = (remoteProfile.data["ridesCount"] as? Number)?.toInt() ?: 0
+                                    ridesCompleted = (remoteProfile.data["rides"] as? Number)?.toInt() ?: 0,
+                                    octanos = (remoteProfile.data["octanos"] as? Number)?.toInt() ?: 0
                                 )
                                 db.userDao().insertOrUpdate(userEntity)
                             }

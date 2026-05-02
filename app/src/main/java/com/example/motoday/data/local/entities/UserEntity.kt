@@ -5,21 +5,22 @@ import androidx.room.PrimaryKey
 
 @Entity(tableName = "user_profile")
 data class UserEntity(
-    @PrimaryKey val id: Int = 1, // ID fijo para el único perfil de usuario local
-    val name: String,
-    val level: String,
+    @PrimaryKey val id: Int = 1,
+    val name: String = "Motero",
+    val level: String = "Novato",
     val profilePictureUri: String? = null,
     val bikePictureUri: String? = null,
-    val bikeModel: String,
-    val bikeSpecs: String,
-    val bikeYear: String,
-    val bikeColor: String,
+    val bikeModel: String = "Sin moto",
+    val bikeSpecs: String = "",
+    val bikeYear: String = "",
+    val bikeColor: String = "",
     val bikeStatus: String = "Excelente",
     val clubName: String = "Independiente",
     val clubRole: String? = null,
-    val groupPhotoUri: String? = null, // Cache para la foto del grupo
+    val groupPhotoUri: String? = null,
     val isIndependent: Boolean = true,
     val totalKilometers: Int = 0,
+    val octanos: Int = 0,
     val medalsCount: Int = 0,
     val ridesCompleted: Int = 0,
     val useMiles: Boolean = false,

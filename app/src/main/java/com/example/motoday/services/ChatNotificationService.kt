@@ -39,10 +39,14 @@ class ChatNotificationService : Service() {
             .setSilent(true)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e("ChatService", "Error iniciando foreground: ${e.message}")
         }
 
         startListening()
@@ -51,13 +55,19 @@ class ChatNotificationService : Service() {
 
     private fun startListening() {
         realtimeSubscription?.close()
+        groupsSubscription?.close()
+        
         serviceScope.launch {
+            // Breve retraso para permitir que la App se estabilice y Room termine migraciones si es necesario
+            delay(2000)
+            
             val auth = AuthManager(applicationContext)
-            val userId = auth.getCurrentUserId() ?: return@launch
             val notificationHelper = NotificationHelper(applicationContext)
-            val realtime = Realtime(appwrite.client)
-
+            
             try {
+                val userId = auth.getCurrentUserId() ?: return@launch
+                val realtime = Realtime(appwrite.client)
+
                 realtimeSubscription = realtime.subscribe(
                     "databases.${AppwriteManager.DATABASE_ID}.collections.${AppwriteManager.COLLECTION_MESSAGES_ID}.documents"
                 ) { event ->
@@ -103,6 +113,7 @@ class ChatNotificationService : Service() {
                     }
                 }
             } catch (e: Exception) {
+                Log.e("ChatService", "Error en suscripción: ${e.message}")
                 delay(10000)
                 startListening()
             }

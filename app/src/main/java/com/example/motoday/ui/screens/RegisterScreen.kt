@@ -174,7 +174,8 @@ fun RegisterScreen(navController: NavController) {
                                     "profilePic" to "",
                                     "bikePic" to "",
                                     "totalKm" to 0,
-                                    "rides" to 0
+                                    "rides" to 0,
+                                    "octanos" to 0
                                 )
                             )
 
@@ -186,7 +187,8 @@ fun RegisterScreen(navController: NavController) {
                                 bikeModel = "Por definir",
                                 bikeSpecs = "Sin datos",
                                 bikeYear = "-",
-                                bikeColor = "-"
+                                bikeColor = "-",
+                                octanos = 0
                             )
                             db.userDao().insertOrUpdate(newUser)
                             
