@@ -39,6 +39,7 @@ import java.util.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.motoday.navigation.Screen
 import com.example.motoday.ui.components.BottomNavigationBar
 import com.example.motoday.ui.components.ChatBubble
@@ -46,6 +47,7 @@ import com.example.motoday.ui.components.ChatMessage
 import com.example.motoday.ui.components.MessageStatus
 import com.example.motoday.ui.components.ChatInput
 import com.example.motoday.ui.components.isLocationMessage
+import com.example.motoday.viewmodel.NotificationViewModel
 import kotlinx.coroutines.launch
 import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.data.remote.AuthManager
@@ -60,7 +62,11 @@ import io.appwrite.services.Realtime
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GroupsScreen(navController: NavController, sharedText: String? = null) {
+fun GroupsScreen(
+    navController: NavController, 
+    sharedText: String? = null,
+    notificationViewModel: NotificationViewModel = viewModel()
+) {
     val context = LocalContext.current
     val appwrite = remember { AppwriteManager.getInstance(context) }
     val authManager = remember { AuthManager(context) }
@@ -70,6 +76,10 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
     var currentUserId by remember { mutableStateOf<String?>(null) }
     var currentUserName by remember { mutableStateOf("Motero") }
     var isLoading by remember { mutableStateOf(true) }
+
+    // Estados para notificaciones centralizados
+    val unreadPrivateMessages by notificationViewModel.unreadPrivateMessages.collectAsState()
+    val unreadGroupsCount by notificationViewModel.unreadGroupsCount.collectAsState()
 
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
 
@@ -156,6 +166,7 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                 if (senderId != currentUserId && !isRead) {
                     scope.launch {
                         appwrite.markMessageAsRead(doc.id)
+                        notificationViewModel.refreshNotifications()
                     }
                 }
             }
@@ -228,6 +239,7 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                                 
                                 if (!isRead) {
                                     appwrite.markMessageAsRead(msgId)
+                                    notificationViewModel.refreshNotifications()
                                 }
                             }
                         }
@@ -261,6 +273,9 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
         if (userId != null) {
             val profile = appwrite.getUserProfile(userId)
             currentUserName = profile?.data?.get("name") as? String ?: "Motero"
+
+            // Cargar notificaciones
+            notificationViewModel.refreshNotifications()
         }
 
         val remoteGroups = appwrite.getGroups()
@@ -734,7 +749,13 @@ fun GroupsScreen(navController: NavController, sharedText: String? = null) {
                 }
             )
         },
-        bottomBar = { BottomNavigationBar(navController) }
+        bottomBar = {
+            BottomNavigationBar(
+                navController = navController,
+                homeNotifications = unreadPrivateMessages,
+                groupsNotifications = unreadGroupsCount
+            )
+        }
     ) { padding ->
         Row(modifier = Modifier.padding(padding).fillMaxSize()) {
             Column(

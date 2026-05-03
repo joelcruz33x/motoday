@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.navigation.NavController
+import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.data.remote.AuthManager
@@ -41,6 +42,7 @@ import com.example.motoday.ui.components.ChatMessage
 import com.example.motoday.ui.components.MessageStatus
 import com.example.motoday.ui.components.ChatInput
 import com.example.motoday.ui.components.isLocationMessage
+import com.example.motoday.viewmodel.NotificationViewModel
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import io.appwrite.exceptions.AppwriteException
@@ -52,7 +54,11 @@ import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PrivateChatScreen(navController: NavController, targetUserId: String) {
+fun PrivateChatScreen(
+    navController: NavController, 
+    targetUserId: String,
+    notificationViewModel: NotificationViewModel = viewModel()
+) {
     val context = LocalContext.current
     val appwrite = remember { AppwriteManager.getInstance(context) }
     val authManager = remember { AuthManager(context) }
@@ -137,6 +143,7 @@ fun PrivateChatScreen(navController: NavController, targetUserId: String) {
                     if (senderId != currentUserId && !isRead) {
                         scope.launch {
                             appwrite.markMessageAsRead(doc.id)
+                            notificationViewModel.refreshNotifications()
                         }
                     }
                 }
@@ -213,6 +220,7 @@ fun PrivateChatScreen(navController: NavController, targetUserId: String) {
                                 // Marcar como leído si es para nosotros
                                 if (!isRead) {
                                     appwrite.markMessageAsRead(msgId)
+                                    notificationViewModel.refreshNotifications()
                                 }
                             }
                         }
@@ -508,11 +516,14 @@ fun PrivateChatScreen(navController: NavController, targetUserId: String) {
                                 text = (targetUser?.data?.get("name") as? String) ?: "Cargando...",
                                 style = MaterialTheme.typography.titleMedium
                             )
-                            Text(
-                                text = "En línea",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.Green
-                            )
+                            val level = targetUser?.data?.get("level") as? String
+                            if (level != null) {
+                                Text(
+                                    text = level,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                     }
                 },

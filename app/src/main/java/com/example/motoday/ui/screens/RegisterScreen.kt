@@ -18,10 +18,12 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.motoday.data.local.AppDatabase
 import com.example.motoday.data.local.entities.UserEntity
 import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.navigation.Screen
+import com.example.motoday.viewmodel.NotificationViewModel
 import io.appwrite.ID
 import io.appwrite.exceptions.AppwriteException
 import kotlinx.coroutines.CoroutineScope
@@ -31,7 +33,10 @@ import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RegisterScreen(navController: NavController) {
+fun RegisterScreen(
+    navController: NavController,
+    notificationViewModel: NotificationViewModel = viewModel()
+) {
     val context = LocalContext.current
     val appwrite = remember { AppwriteManager.getInstance(context) }
     val db = AppDatabase.getDatabase(context)
@@ -194,6 +199,8 @@ fun RegisterScreen(navController: NavController) {
                             
                             withContext(Dispatchers.Main) {
                                 isLoading = false
+                                // Iniciar sistema de notificaciones en tiempo real
+                                notificationViewModel.startRealtime()
                                 navController.navigate(Screen.Home.route) {
                                     popUpTo(Screen.Welcome.route) { inclusive = true }
                                 }

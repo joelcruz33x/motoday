@@ -40,11 +40,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.navigation.NavController
+import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.example.motoday.data.local.AppDatabase
 import com.example.motoday.data.local.entities.UserEntity
 import com.example.motoday.navigation.Screen
 import com.example.motoday.ui.components.BottomNavigationBar
+import com.example.motoday.viewmodel.NotificationViewModel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -55,7 +57,11 @@ import com.example.motoday.data.remote.AuthManager
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun ProfileScreen(navController: NavController, userIdArg: String? = null) {
+fun ProfileScreen(
+    navController: NavController,
+    userIdArg: String? = null,
+    notificationViewModel: NotificationViewModel = viewModel()
+) {
     val context = LocalContext.current
     val db = AppDatabase.getDatabase(context)
     val scope = rememberCoroutineScope()
@@ -63,6 +69,9 @@ fun ProfileScreen(navController: NavController, userIdArg: String? = null) {
     val appwrite = remember { AppwriteManager.getInstance(context) }
     val authManager = remember { AuthManager(context) }
     
+    val unreadPrivateMessages by notificationViewModel.unreadPrivateMessages.collectAsState()
+    val unreadGroupsCount by notificationViewModel.unreadGroupsCount.collectAsState()
+
     var currentUserIdLocal by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         currentUserIdLocal = runCatching { authManager.getCurrentUserId() }.getOrNull()
@@ -71,6 +80,7 @@ fun ProfileScreen(navController: NavController, userIdArg: String? = null) {
 
     // Perfil observado (si es el mío, viene de Room; si es de otro, es un estado local temporal)
     var otherUserProfile by remember { mutableStateOf<UserEntity?>(null) }
+    var userRoles by remember { mutableStateOf<List<Triple<String, String, String?>>>(emptyList()) }
     val myUserProfile by db.userDao().getUserProfile().collectAsState(initial = null)
     
     val userProfile = if (isMyProfile) myUserProfile else otherUserProfile
@@ -82,6 +92,7 @@ fun ProfileScreen(navController: NavController, userIdArg: String? = null) {
 
     LaunchedEffect(userIdArg) {
         val targetUserId = userIdArg ?: authManager.getCurrentUserId()
+        notificationViewModel.refreshNotifications()
         if (targetUserId != null) {
             // 0. Sincronizar Perfil
             try {
@@ -137,53 +148,56 @@ fun ProfileScreen(navController: NavController, userIdArg: String? = null) {
             } catch (e: Exception) {
                 Log.e("ProfileScreen", "Error sincronizando perfil: ${e.message}")
             }
+
+            // Sincronizar Roles para cualquier usuario (Visitante o Propio)
+            try {
+                val userGroups = appwrite.getUserGroups(targetUserId)
+                val gson = com.google.gson.Gson()
+                val type = object : com.google.gson.reflect.TypeToken<Map<String, String>>() {}.type
+                
+                val rolesFound = userGroups.map { doc ->
+                    val rolesMap: Map<String, String> = gson.fromJson(doc.data["roles"] as? String ?: "{}", type) ?: emptyMap()
+                    val role = rolesMap[targetUserId] ?: "Miembro"
+                    val groupName = doc.data["name"] as? String ?: "Grupo"
+                    val groupPhotoId = doc.data["photoUrl"] as? String
+                    val groupPhotoUrl = if (!groupPhotoId.isNullOrBlank() && groupPhotoId != "null") {
+                        appwrite.getImageUrl(groupPhotoId, AppwriteManager.BUCKET_GROUPS_ID)
+                    } else null
+                    
+                    Triple(role, groupName, groupPhotoUrl)
+                }
+                userRoles = rolesFound
+                
+                // Si es mi perfil, actualizamos el primer rol en UserEntity para compatibilidad
+                if (isMyProfile && rolesFound.isNotEmpty()) {
+                    val firstRole = rolesFound.first()
+                    val currentLocal = db.userDao().getUserProfileOnce()
+                    if (currentLocal != null) {
+                        db.userDao().insertOrUpdate(currentLocal.copy(
+                            clubRole = firstRole.first,
+                            clubName = firstRole.second,
+                            groupPhotoUri = firstRole.third
+                        ))
+                    }
+                } else if (isMyProfile && rolesFound.isEmpty()) {
+                    val currentLocal = db.userDao().getUserProfileOnce()
+                    if (currentLocal != null) {
+                        db.userDao().insertOrUpdate(currentLocal.copy(
+                            clubRole = null,
+                            clubName = "Independiente",
+                            groupPhotoUri = null
+                        ))
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("ProfileScreen", "Error sincronizando roles: ${e.message}")
+            }
             
             // Si es mi perfil, hacemos toda la sincronización pesada de Room
             if (isMyProfile) {
                 // ... (el resto de la lógica de sincronización existente se mantiene dentro de este bloque)
                 try {
                     val userId = targetUserId // que es el mío
-                    // 1. Sincronizar Roles
-                    val allGroups = appwrite.getGroups()
-                    val gson = com.google.gson.Gson()
-                    val type = object : com.google.gson.reflect.TypeToken<Map<String, String>>() {}.type
-                    var foundRole: String? = null
-                    var foundGroupName: String = "Independiente"
-                    var foundGroupPhoto: String? = null
-                    var userFoundInAnyGroup = false
-                    
-                    for (doc in allGroups) {
-                        val members = (doc.data["members"] as? List<*>)?.map { it.toString() } ?: emptyList()
-                        if (members.contains(userId)) {
-                            userFoundInAnyGroup = true
-                            val rolesMap: Map<String, String> = gson.fromJson(doc.data["roles"] as? String ?: "{}", type) ?: emptyMap()
-                            foundRole = rolesMap[userId]
-                            foundGroupName = doc.data["name"] as? String ?: "Grupo"
-                            val groupPhoto = doc.data["photoUrl"] as? String
-                            foundGroupPhoto = if (!groupPhoto.isNullOrBlank()) {
-                                appwrite.getImageUrl(groupPhoto, AppwriteManager.BUCKET_GROUPS_ID)
-                            } else null
-                            break
-                        }
-                    }
-
-                    val currentLocal = db.userDao().getUserProfileOnce()
-                    if (currentLocal != null) {
-                        if (userFoundInAnyGroup) {
-                            db.userDao().insertOrUpdate(currentLocal.copy(
-                                clubRole = foundRole,
-                                clubName = foundGroupName,
-                                groupPhotoUri = foundGroupPhoto
-                            ))
-                        } else {
-                            db.userDao().insertOrUpdate(currentLocal.copy(
-                                clubRole = null,
-                                clubName = "Independiente",
-                                groupPhotoUri = null
-                            ))
-                        }
-                    }
-
                     // 2. Sincronizar Sellos
                     val remoteDocuments = appwrite.getUserStamps(userId)
                     if (remoteDocuments.isNotEmpty()) {
@@ -253,7 +267,11 @@ fun ProfileScreen(navController: NavController, userIdArg: String? = null) {
             )
         },
         bottomBar = {
-            BottomNavigationBar(navController)
+            BottomNavigationBar(
+                navController = navController,
+                homeNotifications = unreadPrivateMessages,
+                groupsNotifications = unreadGroupsCount
+            )
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
@@ -293,13 +311,7 @@ fun ProfileScreen(navController: NavController, userIdArg: String? = null) {
                         }
                     }
                 } else {
-                    val currentRoleInfo = remember(user.clubRole, user.clubName, user.groupPhotoUri) {
-                        if (user.clubName != "Independiente" && user.clubName.isNotBlank()) {
-                            Triple(user.clubRole ?: "Miembro", user.clubName, user.groupPhotoUri)
-                        } else null
-                    }
-
-                    ProfileHeader(user, currentRoleInfo, isMyProfile, navController, userIdArg, onImageSelected = { uriString ->
+                    ProfileHeader(user, userRoles, isMyProfile, navController, userIdArg, onImageSelected = { uriString ->
                         scope.launch {
                             try {
                                 val uri = uriString.toUri()
@@ -541,7 +553,7 @@ fun EditProfileForm(user: UserEntity, onSave: (UserEntity) -> Unit) {
 @Composable
 fun ProfileHeader(
     user: UserEntity,
-    roleInfo: Triple<String, String, String?>?,
+    rolesInfo: List<Triple<String, String, String?>>,
     isMyProfile: Boolean,
     navController: NavController,
     userIdArg: String? = null,
@@ -621,7 +633,7 @@ fun ProfileHeader(
                         color = MaterialTheme.colorScheme.primary, 
                         fontWeight = FontWeight.Medium
                     )
-                    if (roleInfo == null && !user.isIndependent && user.clubName.isNotBlank() && user.clubName != "Independiente") {
+                    if (rolesInfo.isEmpty() && !user.isIndependent && user.clubName.isNotBlank() && user.clubName != "Independiente") {
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "• ${user.clubName}", 
@@ -662,8 +674,7 @@ fun ProfileHeader(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            if (roleInfo != null) {
-                val (role, groupName, groupPhoto) = roleInfo
+            rolesInfo.forEach { (role, groupName, groupPhoto) ->
                 val rankStyle = when (role) {
                     "Presidente" -> Triple(Color(0xFFFFD700), Icons.Default.MilitaryTech, "Líder de Club")
                     "Vicepresidente" -> Triple(Color(0xFFC0C0C0), Icons.Default.Star, "Mando Directivo")

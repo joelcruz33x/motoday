@@ -316,6 +316,19 @@ class AppwriteManager(context: Context) {
         }
     }
 
+    suspend fun getUserGroups(userId: String): List<Document<Map<String, Any>>> {
+        return try {
+            databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_GROUPS_ID,
+                queries = listOf(Query.contains("members", listOf(userId)))
+            ).documents
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error getUserGroups: ${e.message}")
+            emptyList()
+        }
+    }
+
     suspend fun getGroup(groupId: String): Document<Map<String, Any>>? {
         return try {
             databases.getDocument(DATABASE_ID, COLLECTION_GROUPS_ID, groupId)
@@ -623,6 +636,62 @@ class AppwriteManager(context: Context) {
         } catch (e: Exception) {
             Log.e("AppwriteManager", "Error markMessageAsRead: ${e.message}")
             false
+        }
+    }
+
+    suspend fun getUnreadPrivateMessagesCount(userId: String): Int {
+        return try {
+            // Buscamos mensajes no leídos donde el groupId empieza con "chat_" 
+            // y contiene el userId (lo cual implica que es un chat privado del usuario)
+            // Y el senderId NO es el userId actual.
+            val response = databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_MESSAGES_ID,
+                queries = listOf(
+                    Query.equal("read", false),
+                    Query.notEqual("senderId", userId),
+                    Query.limit(100) // Límite razonable para contar
+                )
+            )
+            // Filtramos localmente por groupId que contenga el userId y sea privado
+            response.documents.count { doc ->
+                val gid = doc.data["groupId"] as? String ?: ""
+                gid.startsWith("chat_") && gid.contains(userId)
+            }
+        } catch (e: Exception) {
+            Log.e("AppwriteManager", "Error getUnreadPrivateMessagesCount: ${e.message}")
+            0
+        }
+    }
+
+    suspend fun getGroupsWithUnreadMessages(userId: String): Int {
+        return try {
+            // Buscamos mensajes no leídos de grupos (que no empiecen con "chat_")
+            // donde el usuario sea miembro.
+            val myGroups = databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_GROUPS_ID,
+                queries = listOf(Query.contains("members", listOf(userId)))
+            ).documents
+            
+            val groupIds = myGroups.map { it.id }
+            if (groupIds.isEmpty()) return 0
+
+            val response = databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_MESSAGES_ID,
+                queries = listOf(
+                    Query.equal("read", false),
+                    Query.notEqual("senderId", userId),
+                    Query.equal("groupId", groupIds),
+                    Query.limit(100)
+                )
+            )
+            
+            // Contamos cuántos mensajes no leídos hay en total en esos grupos
+            response.documents.size
+        } catch (e: Exception) {
+            0
         }
     }
 

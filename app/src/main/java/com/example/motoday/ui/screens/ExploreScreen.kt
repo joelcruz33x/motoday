@@ -18,11 +18,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.motoday.data.local.AppDatabase
 import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.data.remote.AuthManager
 import com.example.motoday.navigation.Screen
 import com.example.motoday.ui.components.BottomNavigationBar
+import com.example.motoday.viewmodel.NotificationViewModel
 import io.appwrite.models.Document
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -31,12 +33,15 @@ import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ExploreScreen(navController: NavController) {
+fun ExploreScreen(navController: NavController, notificationViewModel: NotificationViewModel = viewModel()) {
     val context = LocalContext.current
     val db = AppDatabase.getDatabase(context)
     val appwrite = remember { AppwriteManager.getInstance(context) }
     val authManager = remember { AuthManager(context) }
     val scope = rememberCoroutineScope()
+
+    val unreadPrivateMessages by notificationViewModel.unreadPrivateMessages.collectAsState()
+    val unreadGroupsCount by notificationViewModel.unreadGroupsCount.collectAsState()
 
     val localRides by db.rideDao().getAllRides().collectAsState(initial = emptyList())
     
@@ -69,6 +74,7 @@ fun ExploreScreen(navController: NavController) {
     LaunchedEffect(Unit) {
         currentUserId = authManager.getCurrentUserId()
         refreshRides()
+        notificationViewModel.refreshNotifications()
     }
 
     // Listener Realtime para actualizaciones globales (Sincroniza Room con Appwrite)
@@ -212,7 +218,11 @@ fun ExploreScreen(navController: NavController) {
             }
         },
         bottomBar = {
-            BottomNavigationBar(navController)
+            BottomNavigationBar(
+                navController = navController,
+                homeNotifications = unreadPrivateMessages,
+                groupsNotifications = unreadGroupsCount
+            )
         }
     ) { padding ->
         LazyColumn(

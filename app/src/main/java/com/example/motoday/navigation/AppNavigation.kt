@@ -7,12 +7,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.motoday.data.remote.AuthManager
+import com.example.motoday.viewmodel.NotificationViewModel
 import com.example.motoday.ui.screens.*
 
 @Composable
@@ -20,6 +22,7 @@ fun AppNavigation(sharedText: String? = null) {
     val navController = rememberNavController()
     val context = LocalContext.current
     val authManager = remember { AuthManager(context) }
+    val notificationViewModel: NotificationViewModel = viewModel()
     
     // Estado para el destino inicial (null mientras verificamos)
     var startDestination by remember { mutableStateOf<String?>(null) }
@@ -56,16 +59,16 @@ fun AppNavigation(sharedText: String? = null) {
                 WelcomeScreen(navController)
             }
             composable(Screen.Login.route) {
-                LoginScreen(navController)
+                LoginScreen(navController, notificationViewModel)
             }
             composable(Screen.Register.route) {
-                RegisterScreen(navController)
+                RegisterScreen(navController, notificationViewModel)
             }
             composable(Screen.Home.route) {
-                HomeScreen(navController)
+                HomeScreen(navController, notificationViewModel)
             }
             composable(Screen.Explore.route) {
-                ExploreScreen(navController)
+                ExploreScreen(navController, notificationViewModel)
             }
             composable(
                 route = Screen.Groups.route,
@@ -76,7 +79,7 @@ fun AppNavigation(sharedText: String? = null) {
                 })
             ) { backStackEntry ->
                 val sharedTextParam = backStackEntry.arguments?.getString("sharedText")
-                GroupsScreen(navController, sharedText = sharedTextParam)
+                GroupsScreen(navController, sharedText = sharedTextParam, notificationViewModel = notificationViewModel)
             }
             composable(
                 route = Screen.Profile.route,
@@ -87,7 +90,7 @@ fun AppNavigation(sharedText: String? = null) {
                 })
             ) { backStackEntry ->
                 val userId = backStackEntry.arguments?.getString("userId")
-                ProfileScreen(navController, userId)
+                ProfileScreen(navController, userId, notificationViewModel)
             }
             composable(Screen.SOS.route) {
                 SOSScreen(navController)
@@ -126,10 +129,10 @@ fun AppNavigation(sharedText: String? = null) {
                 arguments = listOf(navArgument("userId") { type = NavType.StringType })
             ) { backStackEntry ->
                 val userId = backStackEntry.arguments?.getString("userId") ?: ""
-                PrivateChatScreen(navController, userId)
+                PrivateChatScreen(navController, userId, notificationViewModel)
             }
             composable(Screen.PrivateChatsList.route) {
-                PrivateChatsListScreen(navController)
+                PrivateChatsListScreen(navController, notificationViewModel)
             }
         }
     }

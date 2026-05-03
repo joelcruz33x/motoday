@@ -2,7 +2,6 @@ package com.example.motoday.ui.screens
 
 import android.content.Intent
 import android.util.Log
-import android.net.Uri
 import android.text.format.DateUtils
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -36,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.imageLoader
@@ -44,18 +44,23 @@ import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.data.remote.AuthManager
 import com.example.motoday.ui.components.BottomNavigationBar
 import com.example.motoday.navigation.Screen
+import com.example.motoday.viewmodel.NotificationViewModel
 import io.appwrite.models.Document
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(navController: NavController) {
+fun HomeScreen(navController: NavController, notificationViewModel: NotificationViewModel = viewModel()) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val appwrite = remember { AppwriteManager.getInstance(context) }
     val authManager = remember { AuthManager(context) }
     val db = AppDatabase.getDatabase(context)
     
+    val unreadPrivateMessages by notificationViewModel.unreadPrivateMessages.collectAsState()
+    val unreadGroupsCount by notificationViewModel.unreadGroupsCount.collectAsState()
+    val storeNotifications by notificationViewModel.storeNotifications.collectAsState()
+
     var posts by remember { mutableStateOf<List<Document<Map<String, Any>>>>(emptyList()) }
     var activeStories by remember { mutableStateOf<List<Document<Map<String, Any>>>>(emptyList()) }
     var myGroupsMemberIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -69,6 +74,7 @@ fun HomeScreen(navController: NavController) {
     var currentUserId by remember { mutableStateOf("") }
 
     fun loadData(showLoading: Boolean = true) {
+        notificationViewModel.refreshNotifications()
         scope.launch {
             if (showLoading) isRefreshing = true
             try {
@@ -88,7 +94,7 @@ fun HomeScreen(navController: NavController) {
                     storyUserId != null && (storyUserId == currentUserId || myGroupsMemberIds.contains(storyUserId))
                 }
             } catch (e: Exception) {
-                // Error log
+                Log.e("HomeScreen", "Error loadData: ${e.message}")
             } finally {
                 if (showLoading) isRefreshing = false
             }
@@ -165,13 +171,71 @@ fun HomeScreen(navController: NavController) {
             CenterAlignedTopAppBar(
                 title = { Text("MotoDay", fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp) },
                 navigationIcon = {
-                    IconButton(onClick = { navController.navigate(Screen.PrivateChatsList.route) }) {
-                        Icon(Icons.Default.Email, contentDescription = "Chats", tint = MaterialTheme.colorScheme.primary)
+                    Box(
+                        modifier = Modifier
+                            .padding(start = 4.dp)
+                            .size(48.dp)
+                            .clickable(
+                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                indication = androidx.compose.material.ripple.rememberRipple(bounded = false),
+                                onClick = { navController.navigate(Screen.PrivateChatsList.route) }
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        BadgedBox(
+                            badge = {
+                                if (unreadPrivateMessages > 0) {
+                                    Badge(
+                                        containerColor = Color.Red,
+                                        contentColor = Color.White,
+                                        modifier = Modifier.offset(x = (-6).dp, y = 6.dp)
+                                    ) { 
+                                        Text(unreadPrivateMessages.toString(), fontSize = 10.sp) 
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.Email, 
+                                contentDescription = "Chats", 
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
                     }
                 },
                 actions = {
-                    IconButton(onClick = { navController.navigate(Screen.Store.route) }) {
-                        Icon(Icons.Default.ShoppingCart, contentDescription = "Tienda", tint = MaterialTheme.colorScheme.primary)
+                    Box(
+                        modifier = Modifier
+                            .padding(end = 4.dp)
+                            .size(48.dp)
+                            .clickable(
+                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                indication = androidx.compose.material.ripple.rememberRipple(bounded = false),
+                                onClick = { navController.navigate(Screen.Store.route) }
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        BadgedBox(
+                            badge = {
+                                if (storeNotifications > 0) {
+                                    Badge(
+                                        containerColor = Color.Red,
+                                        contentColor = Color.White,
+                                        modifier = Modifier.offset(x = (-6).dp, y = 6.dp)
+                                    ) { 
+                                        Text(storeNotifications.toString(), fontSize = 10.sp) 
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.ShoppingCart, 
+                                contentDescription = "Tienda", 
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
                     }
                     IconButton(onClick = { navController.navigate(Screen.SOS.route) }) {
                         Icon(Icons.Default.Warning, contentDescription = "SOS", tint = Color(0xFFD32F2F), modifier = Modifier.size(28.dp))
@@ -187,7 +251,11 @@ fun HomeScreen(navController: NavController) {
             )
         },
         bottomBar = {
-            BottomNavigationBar(navController)
+            BottomNavigationBar(
+                navController = navController,
+                homeNotifications = unreadPrivateMessages,
+                groupsNotifications = unreadGroupsCount
+            )
         }
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
@@ -225,15 +293,16 @@ fun HomeScreen(navController: NavController) {
 
                     items(posts, key = { it.id }) { post ->
                         val data = post.data
+                        @Suppress("UNCHECKED_CAST")
                         val likes = (data["likes"] as? List<String>) ?: emptyList()
-                        val rawTimestamp = data["timestamp"]
-                        val timestamp = when (rawTimestamp) {
+                        val timestamp = when (val rawTimestamp = data["timestamp"]) {
                             is Number -> rawTimestamp.toLong()
                             else -> System.currentTimeMillis()
                         }
                         
                         val postUsername = data["userName"] as? String ?: "Motero"
                         val postContent = data["caption"] as? String ?: ""
+                        @Suppress("UNCHECKED_CAST")
                         val postImageUrls = (data["imageUrl"] as? List<String>) ?: emptyList()
 
                         PostItem(
@@ -429,7 +498,7 @@ fun PostItem(
     onUserClick: () -> Unit = {}
 ) {
     var localIsLiked by remember(isLiked) { mutableStateOf(isLiked) }
-    var localLikesCount by remember(likesCount) { mutableStateOf(likesCount) }
+    var localLikesCount by remember(likesCount) { androidx.compose.runtime.mutableIntStateOf(likesCount) }
 
     val scale by animateFloatAsState(
         targetValue = if (localIsLiked) 1.2f else 1.0f,

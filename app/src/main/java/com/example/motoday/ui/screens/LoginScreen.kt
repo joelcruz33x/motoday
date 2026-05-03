@@ -17,8 +17,10 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.navigation.Screen
+import com.example.motoday.viewmodel.NotificationViewModel
 import io.appwrite.exceptions.AppwriteException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -29,7 +31,10 @@ import com.example.motoday.data.local.entities.UserEntity
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LoginScreen(navController: NavController) {
+fun LoginScreen(
+    navController: NavController,
+    notificationViewModel: NotificationViewModel = viewModel()
+) {
     val context = LocalContext.current
     val appwrite = remember { AppwriteManager.getInstance(context) }
     val db = AppDatabase.getDatabase(context)
@@ -126,6 +131,8 @@ fun LoginScreen(navController: NavController) {
 
                             withContext(Dispatchers.Main) {
                                 isLoading = false
+                                // Iniciar sistema de notificaciones en tiempo real al loguear
+                                notificationViewModel.startRealtime()
                                 navController.navigate(Screen.Home.route) {
                                     popUpTo(Screen.Login.route) { inclusive = true }
                                 }

@@ -21,10 +21,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.data.remote.AuthManager
 import com.example.motoday.navigation.Screen
+import com.example.motoday.viewmodel.NotificationViewModel
 import io.appwrite.Query
 import io.appwrite.models.Document
 import kotlinx.coroutines.launch
@@ -33,7 +35,10 @@ import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PrivateChatsListScreen(navController: NavController) {
+fun PrivateChatsListScreen(
+    navController: NavController,
+    notificationViewModel: NotificationViewModel = viewModel()
+) {
     val context = LocalContext.current
     val appwrite = remember { AppwriteManager.getInstance(context) }
     val authManager = remember { AuthManager(context) }
@@ -44,6 +49,7 @@ fun PrivateChatsListScreen(navController: NavController) {
     var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
+        notificationViewModel.refreshNotifications()
         val uid = authManager.getCurrentUserId()
         currentUserId = uid
         
