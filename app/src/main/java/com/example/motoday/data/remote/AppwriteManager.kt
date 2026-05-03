@@ -695,6 +695,35 @@ class AppwriteManager(context: Context) {
         }
     }
 
+    suspend fun getUnreadMessagesPerGroup(userId: String): Map<String, Int> {
+        return try {
+            val myGroups = databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_GROUPS_ID,
+                queries = listOf(Query.contains("members", listOf(userId)))
+            ).documents
+            
+            val groupIds = myGroups.map { it.id }
+            if (groupIds.isEmpty()) return emptyMap()
+
+            val response = databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_MESSAGES_ID,
+                queries = listOf(
+                    Query.equal("read", false),
+                    Query.notEqual("senderId", userId),
+                    Query.equal("groupId", groupIds),
+                    Query.limit(100)
+                )
+            )
+            
+            response.documents.groupBy { it.data["groupId"] as String }
+                .mapValues { it.value.size }
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
     // --- CONTACTOS DE EMERGENCIA ---
     suspend fun syncContact(userId: String, name: String, phone: String, relation: String): Boolean {
         return try {

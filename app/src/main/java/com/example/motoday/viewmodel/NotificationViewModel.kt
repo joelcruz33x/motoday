@@ -22,6 +22,9 @@ class NotificationViewModel(application: Application) : AndroidViewModel(applica
     private val _unreadGroupsCount = MutableStateFlow(0)
     val unreadGroupsCount: StateFlow<Int> = _unreadGroupsCount.asStateFlow()
 
+    private val _unreadMessagesPerGroup = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val unreadMessagesPerGroup: StateFlow<Map<String, Int>> = _unreadMessagesPerGroup.asStateFlow()
+
     private val _storeNotifications = MutableStateFlow(0)
     val storeNotifications: StateFlow<Int> = _storeNotifications.asStateFlow()
 
@@ -79,9 +82,11 @@ class NotificationViewModel(application: Application) : AndroidViewModel(applica
             try {
                 // Obtenemos los conteos actualizados desde Appwrite
                 val privateCount = appwriteManager.getUnreadPrivateMessagesCount(userId)
-                val groupsCount = appwriteManager.getGroupsWithUnreadMessages(userId)
+                val unreadPerGroup = appwriteManager.getUnreadMessagesPerGroup(userId)
+                val groupsCount = unreadPerGroup.values.sum()
                 
                 _unreadPrivateMessages.value = privateCount
+                _unreadMessagesPerGroup.value = unreadPerGroup
                 _unreadGroupsCount.value = groupsCount
                 
                 Log.d("NotificationVM", "Contadores actualizados: Privados=$privateCount, Grupos=$groupsCount")

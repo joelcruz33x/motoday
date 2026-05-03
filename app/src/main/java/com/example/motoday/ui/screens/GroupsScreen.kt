@@ -80,6 +80,7 @@ fun GroupsScreen(
     // Estados para notificaciones centralizados
     val unreadPrivateMessages by notificationViewModel.unreadPrivateMessages.collectAsState()
     val unreadGroupsCount by notificationViewModel.unreadGroupsCount.collectAsState()
+    val unreadMessagesPerGroup by notificationViewModel.unreadMessagesPerGroup.collectAsState()
 
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
 
@@ -789,11 +790,13 @@ fun GroupsScreen(
                 }.forEach { doc ->
                     val rawPhotoUrl = doc.data["photoUrl"] as? String
                     val finalPhotoUrl = if (!rawPhotoUrl.isNullOrEmpty() && rawPhotoUrl != "null") appwrite.getImageUrl(rawPhotoUrl, AppwriteManager.BUCKET_GROUPS_ID) else null
+                    val unreadCount = unreadMessagesPerGroup[doc.id] ?: 0
                     
                     GroupIconCircle(
                         name = doc.data["name"] as? String ?: "Grupo",
                         photoUrl = finalPhotoUrl,
                         isSelected = !isExploring && selectedGroupId == doc.id,
+                        unreadCount = unreadCount,
                         onClick = { 
                             selectedGroupId = doc.id 
                             isExploring = false
@@ -1285,8 +1288,15 @@ fun GroupRequestsDialog(
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GroupIconCircle(name: String, photoUrl: String?, isSelected: Boolean, onClick: () -> Unit) {
+fun GroupIconCircle(
+    name: String, 
+    photoUrl: String?, 
+    isSelected: Boolean, 
+    unreadCount: Int = 0,
+    onClick: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1306,26 +1316,40 @@ fun GroupIconCircle(name: String, photoUrl: String?, isSelected: Boolean, onClic
         Spacer(modifier = Modifier.width(8.dp))
         
         // El icono o foto del grupo
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(if (isSelected) RoundedCornerShape(12.dp) else CircleShape)
-                .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)),
-            contentAlignment = Alignment.Center
+        BadgedBox(
+            badge = {
+                if (unreadCount > 0) {
+                    Badge(
+                        containerColor = Color.Red,
+                        contentColor = Color.White,
+                        modifier = Modifier.offset(x = (-4).dp, y = 4.dp)
+                    ) {
+                        Text(unreadCount.toString(), fontSize = 10.sp)
+                    }
+                }
+            }
         ) {
-            if (!photoUrl.isNullOrEmpty()) {
-                AsyncImage(
-                    model = photoUrl,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
-            } else {
-                Text(
-                    text = name.take(1).uppercase(),
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
-                )
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(if (isSelected) RoundedCornerShape(12.dp) else CircleShape)
+                    .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (!photoUrl.isNullOrEmpty()) {
+                    AsyncImage(
+                        model = photoUrl,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Text(
+                        text = name.take(1).uppercase(),
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }
