@@ -78,7 +78,32 @@ fun HomeScreen(navController: NavController, notificationViewModel: Notification
         scope.launch {
             if (showLoading) isRefreshing = true
             try {
-                currentUserId = authManager.getCurrentUserId() ?: ""
+                val userId = authManager.getCurrentUserId() ?: ""
+                currentUserId = userId
+
+                // Sincronización rápida del perfil para asegurar que la foto aparezca (especialmente tras reinstalar)
+                if (userId.isNotEmpty()) {
+                    val remoteProfile = appwrite.getUserProfile(userId)
+                    if (remoteProfile != null) {
+                        val data = remoteProfile.data
+                        val profilePicId = data["profilePic"] as? String
+                        val profilePicUrl = if (!profilePicId.isNullOrBlank() && profilePicId != "null") {
+                            appwrite.getImageUrl(profilePicId, AppwriteManager.BUCKET_PROFILES_ID)
+                        } else null
+
+                        val localProfile = db.userDao().getUserProfileOnce()
+                        val updatedProfile = (localProfile ?: com.example.motoday.data.local.entities.UserEntity(id = 1)).copy(
+                            name = data["name"] as? String ?: "Motero",
+                            level = data["level"] as? String ?: "Novato",
+                            profilePictureUri = profilePicUrl,
+                            octanos = (data["octanos"] as? Number)?.toInt() ?: 0,
+                            totalKilometers = (data["totalKm"] as? Number)?.toInt() ?: 0,
+                            ridesCompleted = (data["rides"] as? Number)?.toInt() ?: 0
+                        )
+                        db.userDao().insertOrUpdate(updatedProfile)
+                    }
+                }
+
                 posts = appwrite.getPosts()
                 
                 // Obtenemos los IDs de los miembros de mis grupos
