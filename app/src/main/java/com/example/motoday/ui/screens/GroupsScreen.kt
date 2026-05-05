@@ -81,6 +81,7 @@ fun GroupsScreen(
     val unreadPrivateMessages by notificationViewModel.unreadPrivateMessages.collectAsState()
     val unreadGroupsCount by notificationViewModel.unreadGroupsCount.collectAsState()
     val unreadMessagesPerGroup by notificationViewModel.unreadMessagesPerGroup.collectAsState()
+    val profileNotifications by notificationViewModel.profileNotifications.collectAsState()
 
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
 
@@ -754,7 +755,8 @@ fun GroupsScreen(
             BottomNavigationBar(
                 navController = navController,
                 homeNotifications = unreadPrivateMessages,
-                groupsNotifications = unreadGroupsCount
+                groupsNotifications = unreadGroupsCount,
+                profileNotifications = profileNotifications
             )
         }
     ) { padding ->

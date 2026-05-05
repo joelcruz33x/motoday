@@ -42,6 +42,7 @@ fun ExploreScreen(navController: NavController, notificationViewModel: Notificat
 
     val unreadPrivateMessages by notificationViewModel.unreadPrivateMessages.collectAsState()
     val unreadGroupsCount by notificationViewModel.unreadGroupsCount.collectAsState()
+    val profileNotifications by notificationViewModel.profileNotifications.collectAsState()
 
     val localRides by db.rideDao().getAllRides().collectAsState(initial = emptyList())
     
@@ -221,7 +222,8 @@ fun ExploreScreen(navController: NavController, notificationViewModel: Notificat
             BottomNavigationBar(
                 navController = navController,
                 homeNotifications = unreadPrivateMessages,
-                groupsNotifications = unreadGroupsCount
+                groupsNotifications = unreadGroupsCount,
+                profileNotifications = profileNotifications
             )
         }
     ) { padding ->
@@ -314,6 +316,7 @@ fun ExploreScreen(navController: NavController, notificationViewModel: Notificat
                         else -> ride.status
                     },
                     participantsCount = ride.participantsCount,
+                    creatorName = ride.creatorName,
                     onClick = {
                         navController.navigate(Screen.RideDetail.createRoute(ride.id))
                     }
@@ -338,6 +341,7 @@ fun ExploreScreen(navController: NavController, notificationViewModel: Notificat
                     location = "Desde: ${data["startLocation"]} hasta ${data["endLocation"]}",
                     status = "Disponible",
                     participantsCount = participants,
+                    creatorName = data["creatorName"]?.toString() ?: "MotoDay User",
                     onClick = {
                         scope.launch {
                             try {
@@ -401,6 +405,7 @@ fun RideCard(
     location: String,
     status: String,
     participantsCount: Int,
+    creatorName: String,
     onClick: () -> Unit
 ) {
     Card(
@@ -409,68 +414,18 @@ fun RideCard(
         onClick = onClick
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // Título arriba
-            Text(
-                text = title,
-                fontWeight = FontWeight.ExtraBold,
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-
-            // Fila de etiquetas y estado
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.Top
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val diffColor = when (difficulty) {
-                        "Fácil" -> Color(0xFF4CAF50)
-                        "Intermedio" -> Color(0xFFFF9800)
-                        "Difícil" -> Color(0xFFF44336)
-                        else -> MaterialTheme.colorScheme.primary
-                    }
-                    
-                    // Etiqueta de Nivel (Dificultad)
-                    Surface(
-                        color = diffColor,
-                        shape = RoundedCornerShape(4.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                        ) {
-                            Icon(Icons.Default.TrendingUp, null, modifier = Modifier.size(12.dp), tint = Color.White)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Nivel: $difficulty",
-                                color = Color.White,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-
-                    // Etiqueta de Terreno (Gris con texto blanco)
-                    Surface(
-                        color = Color(0xFF757575), // Gris oscuro para contraste
-                        shape = RoundedCornerShape(4.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                        ) {
-                            Icon(Icons.Default.Landscape, null, modifier = Modifier.size(12.dp), tint = Color.White)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Terreno: $terrainType",
-                                color = Color.White,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
+                // Título arriba
+                Text(
+                    text = title,
+                    fontWeight = FontWeight.ExtraBold,
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.weight(1f).padding(bottom = 4.dp)
+                )
 
                 Badge(
                     containerColor = when (status) {
@@ -487,6 +442,78 @@ fun RideCard(
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 4.dp)
                     )
+                }
+            }
+
+            // Gestionado por:
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = if (creatorName.contains(" ") || creatorName.length > 15) Icons.Default.Person else Icons.Default.Groups, 
+                    contentDescription = null, 
+                    modifier = Modifier.size(14.dp),
+                    tint = Color.Gray
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "Por: $creatorName",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.Gray
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Fila de etiquetas
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val diffColor = when (difficulty) {
+                    "Fácil" -> Color(0xFF4CAF50)
+                    "Intermedio" -> Color(0xFFFF9800)
+                    "Difícil" -> Color(0xFFF44336)
+                    else -> MaterialTheme.colorScheme.primary
+                }
+                
+                // Etiqueta de Nivel (Dificultad)
+                Surface(
+                    color = diffColor,
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Icon(Icons.Default.TrendingUp, null, modifier = Modifier.size(12.dp), tint = Color.White)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Nivel: $difficulty",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                // Etiqueta de Terreno (Gris con texto blanco)
+                Surface(
+                    color = Color(0xFF757575), // Gris oscuro para contraste
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Icon(Icons.Default.Landscape, null, modifier = Modifier.size(12.dp), tint = Color.White)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Terreno: $terrainType",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
 

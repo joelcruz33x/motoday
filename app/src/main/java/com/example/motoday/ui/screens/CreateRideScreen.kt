@@ -22,6 +22,7 @@ import com.example.motoday.data.local.AppDatabase
 import com.example.motoday.data.local.entities.RideEntity
 import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.data.remote.AuthManager
+import io.appwrite.models.Document
 import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -55,8 +56,22 @@ fun CreateRideScreen(navController: NavController) {
     var difficulty by remember { mutableStateOf("Fácil") }
     var terrainType by remember { mutableStateOf("Asfalto") }
 
+    // Publisher State
+    var isIndependent by remember { mutableStateOf(true) }
+    var selectedGroupId by remember { mutableStateOf<String?>(null) }
+    var userGroups by remember { mutableStateOf<List<Document<Map<String, Any>>>>(emptyList()) }
+    var expandedPublisher by remember { mutableStateOf(false) }
+
     var showStartMapPicker by remember { mutableStateOf(false) }
     var showEndMapPicker by remember { mutableStateOf(false) }
+
+    // Load user groups
+    LaunchedEffect(Unit) {
+        val userId = authManager.getCurrentUserId()
+        if (userId != null) {
+            userGroups = appwrite.getUserGroups(userId)
+        }
+    }
 
     // Date and Time State
     val calendar = remember { Calendar.getInstance() }
@@ -245,6 +260,68 @@ fun CreateRideScreen(navController: NavController) {
                 }
             }
 
+            // PUBLICADOR (Independiente o Grupo)
+            Text("Publicar como:", style = MaterialTheme.typography.titleSmall)
+            Box(modifier = Modifier.fillMaxWidth()) {
+                val publisherText = if (isIndependent) {
+                    "Independiente (Tu nombre)"
+                } else {
+                    userGroups.firstOrNull { it.id == selectedGroupId }?.data?.get("name")?.toString() ?: "Seleccionar Grupo"
+                }
+
+                OutlinedCard(
+                    onClick = { expandedPublisher = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                if (isIndependent) Icons.Default.Person else Icons.Default.Groups,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(publisherText)
+                        }
+                        Icon(Icons.Default.ArrowDropDown, null)
+                    }
+                }
+
+                DropdownMenu(
+                    expanded = expandedPublisher,
+                    onDismissRequest = { expandedPublisher = false },
+                    modifier = Modifier.fillMaxWidth(0.9f)
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Independiente (Tu nombre)") },
+                        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
+                        onClick = {
+                            isIndependent = true
+                            selectedGroupId = null
+                            expandedPublisher = false
+                        }
+                    )
+                    if (userGroups.isNotEmpty()) {
+                        Divider(modifier = Modifier.padding(vertical = 4.dp))
+                        userGroups.forEach { group ->
+                            DropdownMenuItem(
+                                text = { Text(group.data["name"]?.toString() ?: "Grupo") },
+                                leadingIcon = { Icon(Icons.Default.Groups, contentDescription = null) },
+                                onClick = {
+                                    isIndependent = false
+                                    selectedGroupId = group.id
+                                    expandedPublisher = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
 
             Button(
@@ -252,7 +329,12 @@ fun CreateRideScreen(navController: NavController) {
                     scope.launch {
                         val userId = authManager.getCurrentUserId() ?: "anonymous"
                         val userProfile = db.userDao().getUserProfileOnce()
-                        val creatorName = userProfile?.name ?: "MotoDay User"
+                        
+                        val creatorName = if (isIndependent) {
+                            userProfile?.name ?: "MotoDay User"
+                        } else {
+                            userGroups.firstOrNull { it.id == selectedGroupId }?.data?.get("name")?.toString() ?: "Moto Club"
+                        }
 
                         val stopsList = scheduledStops.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 

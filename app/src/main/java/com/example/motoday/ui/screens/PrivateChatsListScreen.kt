@@ -48,6 +48,8 @@ fun PrivateChatsListScreen(
     var chatSummaries by remember { mutableStateOf<List<ChatSummary>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
+    val unreadMessagesPerConversation by notificationViewModel.unreadMessagesPerConversation.collectAsState()
+
     LaunchedEffect(Unit) {
         notificationViewModel.refreshNotifications()
         val uid = authManager.getCurrentUserId()
@@ -95,7 +97,8 @@ fun PrivateChatsListScreen(
                         targetUserProfilePic = otherProfile?.data?.get("profilePic") as? String,
                         lastMessage = lastMsg.data["text"] as? String ?: "",
                         time = sdf.format(Date(ts)),
-                        timestamp = ts
+                        timestamp = ts,
+                        conversationId = convId
                     ))
                 }
                 
@@ -131,7 +134,8 @@ fun PrivateChatsListScreen(
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
                 items(chatSummaries) { chat ->
-                    ChatListItem(chat) {
+                    val unreadCount = unreadMessagesPerConversation[chat.conversationId] ?: 0
+                    ChatListItem(chat, unreadCount) {
                         navController.navigate(Screen.PrivateChat.createRoute(chat.targetUserId))
                     }
                     Divider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp, color = Color.LightGray.copy(alpha = 0.5f))
@@ -142,7 +146,7 @@ fun PrivateChatsListScreen(
 }
 
 @Composable
-fun ChatListItem(chat: ChatSummary, onClick: () -> Unit) {
+fun ChatListItem(chat: ChatSummary, unreadCount: Int, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -189,16 +193,41 @@ fun ChatListItem(chat: ChatSummary, onClick: () -> Unit) {
                 Text(
                     text = chat.time,
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color.Gray
+                    color = if (unreadCount > 0) Color(0xFF00FFFF) else Color.Gray,
+                    fontWeight = if (unreadCount > 0) FontWeight.Bold else FontWeight.Normal
                 )
             }
-            Text(
-                text = chat.lastMessage,
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.Gray,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = chat.lastMessage,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.Gray,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                
+                if (unreadCount > 0) {
+                    Box(
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .size(20.dp)
+                            .background(Color(0xFF00FFFF), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = unreadCount.toString(),
+                            color = Color(0xFF6200EE),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -209,5 +238,6 @@ data class ChatSummary(
     val targetUserProfilePic: String?,
     val lastMessage: String,
     val time: String,
-    val timestamp: Long
+    val timestamp: Long,
+    val conversationId: String
 )

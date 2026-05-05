@@ -122,7 +122,7 @@ fun AppNavigation(sharedText: String? = null) {
                 arguments = listOf(navArgument("rideId") { type = NavType.IntType })
             ) { backStackEntry ->
                 val rideId = backStackEntry.arguments?.getInt("rideId") ?: 0
-                RideDetailScreen(navController, rideId)
+                RideDetailScreen(navController, rideId, notificationViewModel)
             }
             composable(
                 route = Screen.PrivateChat.route,

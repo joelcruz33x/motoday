@@ -59,6 +59,7 @@ fun HomeScreen(navController: NavController, notificationViewModel: Notification
     
     val unreadPrivateMessages by notificationViewModel.unreadPrivateMessages.collectAsState()
     val unreadGroupsCount by notificationViewModel.unreadGroupsCount.collectAsState()
+    val profileNotifications by notificationViewModel.profileNotifications.collectAsState()
     val storeNotifications by notificationViewModel.storeNotifications.collectAsState()
 
     var posts by remember { mutableStateOf<List<Document<Map<String, Any>>>>(emptyList()) }
@@ -279,7 +280,8 @@ fun HomeScreen(navController: NavController, notificationViewModel: Notification
             BottomNavigationBar(
                 navController = navController,
                 homeNotifications = unreadPrivateMessages,
-                groupsNotifications = unreadGroupsCount
+                groupsNotifications = unreadGroupsCount,
+                profileNotifications = profileNotifications
             )
         }
     ) { padding ->

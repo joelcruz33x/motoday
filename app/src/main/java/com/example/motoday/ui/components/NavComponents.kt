@@ -18,7 +18,8 @@ fun BottomNavigationBar(
     navController: NavController,
     homeNotifications: Int = 0,
     exploreNotifications: Int = 0,
-    groupsNotifications: Int = 0
+    groupsNotifications: Int = 0,
+    profileNotifications: Int = 0
 ) {
     NavigationBar(
         containerColor = MaterialTheme.colorScheme.surface,
@@ -31,7 +32,7 @@ fun BottomNavigationBar(
             NavigationItem(Screen.Home.route, Icons.Default.Home, "Inicio", homeNotifications),
             NavigationItem(Screen.Explore.route, Icons.Default.Map, "Rutas", exploreNotifications),
             NavigationItem(Screen.Groups.route, Icons.Default.Groups, "Motoclubs", groupsNotifications),
-            NavigationItem("profile", Icons.Default.Person, "Perfil", 0)
+            NavigationItem("profile", Icons.Default.Person, "Perfil", profileNotifications)
         )
 
         items.forEach { item ->

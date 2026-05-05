@@ -724,6 +724,27 @@ class AppwriteManager(context: Context) {
         }
     }
 
+    suspend fun getUnreadMessagesPerConversation(userId: String): Map<String, Int> {
+        return try {
+            val response = databases.listDocuments(
+                databaseId = DATABASE_ID,
+                collectionId = COLLECTION_MESSAGES_ID,
+                queries = listOf(
+                    Query.equal("read", false),
+                    Query.notEqual("senderId", userId),
+                    Query.limit(100)
+                )
+            )
+            // Filtramos y agrupamos solo los chats privados (que empiezan por chat_)
+            response.documents
+                .filter { (it.data["groupId"] as? String)?.startsWith("chat_") == true }
+                .groupBy { it.data["groupId"] as String }
+                .mapValues { it.value.size }
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
     // --- CONTACTOS DE EMERGENCIA ---
     suspend fun syncContact(userId: String, name: String, phone: String, relation: String): Boolean {
         return try {

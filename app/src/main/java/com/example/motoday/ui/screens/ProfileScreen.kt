@@ -71,6 +71,7 @@ fun ProfileScreen(
     
     val unreadPrivateMessages by notificationViewModel.unreadPrivateMessages.collectAsState()
     val unreadGroupsCount by notificationViewModel.unreadGroupsCount.collectAsState()
+    val profileNotifications by notificationViewModel.profileNotifications.collectAsState()
 
     var currentUserIdLocal by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
@@ -93,6 +94,12 @@ fun ProfileScreen(
     LaunchedEffect(userIdArg) {
         val targetUserId = userIdArg ?: authManager.getCurrentUserId()
         notificationViewModel.refreshNotifications()
+        
+        // Si estamos entrando a nuestro propio perfil, limpiamos las notificaciones visuales
+        if (isMyProfile) {
+            notificationViewModel.clearProfileNotifications()
+        }
+
         if (targetUserId != null) {
             // 0. Sincronizar Perfil
             try {
@@ -270,7 +277,8 @@ fun ProfileScreen(
             BottomNavigationBar(
                 navController = navController,
                 homeNotifications = unreadPrivateMessages,
-                groupsNotifications = unreadGroupsCount
+                groupsNotifications = unreadGroupsCount,
+                profileNotifications = if (isMyProfile) 0 else profileNotifications
             )
         }
     ) { padding ->
@@ -1543,8 +1551,38 @@ fun AchievementsSection(user: UserEntity) {
     val context = LocalContext.current
     val db = AppDatabase.getDatabase(context)
     val stamps by db.passportDao().getAllStamps().collectAsState(initial = emptyList())
+    val bikes by db.bikeDao().getAllBikes().collectAsState(initial = emptyList())
+    val logs by db.maintenanceDao().getAllLogs().collectAsState(initial = emptyList())
+    val rides by db.rideDao().getAllRides().collectAsState(initial = emptyList())
 
-    LazyColumn(modifier = Modifier.padding(16.dp).fillMaxSize()) {
+    // Cálculos para logros de mecánica
+    val oilChangesCount = logs.count { it.type == "Aceite" }
+    val uniqueMaintenanceTypes = logs.map { it.type }.distinct().size
+    val totalMaintenanceTypes = 5 // Aceite, Frenos, Llantas, Kit Arrastre, General (ABC)
+
+    // Cálculos para nuevos logros de ruta
+    val completedRides = rides.filter { it.status == "COMPLETED" }
+    
+    val currentMonth = Calendar.getInstance().get(Calendar.MONTH)
+    val currentYear = Calendar.getInstance().get(Calendar.YEAR)
+    val ridesThisMonth = completedRides.count { 
+        val cal = Calendar.getInstance().apply { timeInMillis = it.date }
+        cal.get(Calendar.MONTH) == currentMonth && cal.get(Calendar.YEAR) == currentYear
+    }
+
+    val terrainTypes = completedRides.map { it.terrainType.lowercase(Locale.getDefault()) }
+    val hasOffRoad = terrainTypes.any { it.contains("off") || it.contains("tierra") }
+    val hasAsphalt = terrainTypes.any { it.contains("asfalto") || it.contains("pavimento") }
+    val hasMixed = terrainTypes.any { it.contains("mixto") }
+
+    val offRoadCount = completedRides.count { 
+        val t = it.terrainType.lowercase(Locale.getDefault())
+        t.contains("off") || t.contains("tierra")
+    }
+    
+    val hardRidesCount = completedRides.count { it.difficulty == "Difícil" }
+
+    LazyColumn(modifier = Modifier.padding(16.dp).fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp)) {
         item {
             Text(text = "Mis Trofeos y Medallas", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text(text = "Cumple objetivos para desbloquear recompensas visuales", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
@@ -1558,11 +1596,80 @@ fun AchievementsSection(user: UserEntity) {
                 isUnlocked = user.ridesCompleted >= 1
             )
         }
+        
+        // --- LOGROS DE RUTA (NUEVOS) ---
+        item {
+            AchievementItem(
+                title = "Quema Llantas",
+                desc = "Realiza 5 rutas en el mes",
+                isUnlocked = ridesThisMonth >= 5
+            )
+        }
+        item {
+            AchievementItem(
+                title = "Todo Terreno",
+                desc = "Realiza rutas en terreno off road, asfalto y mixto",
+                isUnlocked = hasOffRoad && hasAsphalt && hasMixed
+            )
+        }
+        item {
+            AchievementItem(
+                title = "Tierra en las Llantas",
+                desc = "Completa 3 rutas en terreno off-road",
+                isUnlocked = offRoadCount >= 3
+            )
+        }
+        item {
+            AchievementItem(
+                title = "Kang el Conquistador",
+                desc = "Visita 10 ciudades diferentes",
+                isUnlocked = stamps.distinctBy { it.locationName.lowercase(Locale.getDefault()) }.size >= 10
+            )
+        }
+        item {
+            AchievementItem(
+                title = "Temerario",
+                desc = "Realiza 5 rutas en dificultad difícil",
+                isUnlocked = hardRidesCount >= 5
+            )
+        }
+
+        // --- LOGROS DE MECÁNICA ---
+        item {
+            AchievementItem(
+                title = "Mecánica Básica",
+                desc = "Realiza 1 cambio de aceite",
+                isUnlocked = oilChangesCount >= 1
+            )
+        }
+        item {
+            AchievementItem(
+                title = "Mecánica Intermedia",
+                desc = "Realiza la mitad de los servicios de mantenimiento",
+                isUnlocked = uniqueMaintenanceTypes >= (totalMaintenanceTypes / 2) + 1
+            )
+        }
+        item {
+            AchievementItem(
+                title = "Mecánica Experta",
+                desc = "Realiza todos los servicios de mantenimiento",
+                isUnlocked = uniqueMaintenanceTypes >= totalMaintenanceTypes
+            )
+        }
+        item {
+            AchievementItem(
+                title = "Consumidor de Aceite",
+                desc = "Realiza 10 cambios de aceite",
+                isUnlocked = oilChangesCount >= 10
+            )
+        }
+
+        // --- LOGROS DE DISTANCIA Y OTROS ---
         item {
             AchievementItem(
                 title = "Explorador Regional",
                 desc = "Visita 3 ciudades diferentes",
-                isUnlocked = stamps.distinctBy { it.locationName.lowercase() }.size >= 3
+                isUnlocked = stamps.distinctBy { it.locationName.lowercase(Locale.getDefault()) }.size >= 3
             )
         }
         item {
@@ -1574,9 +1681,23 @@ fun AchievementsSection(user: UserEntity) {
         }
         item {
             AchievementItem(
-                title = "Leyenda de la Carretera",
-                desc = "Visita 10 ciudades diferentes",
-                isUnlocked = stamps.distinctBy { it.locationName.lowercase() }.size >= 10
+                title = "Nómada del Asfalto",
+                desc = if (user.useMiles) "Supera las 620 millas recorridas" else "Supera los 1000km recorridos",
+                isUnlocked = user.totalKilometers >= 1000
+            )
+        }
+        item {
+            AchievementItem(
+                title = "Coleccionista",
+                desc = "Ten 2 o más motos en tu garaje",
+                isUnlocked = bikes.size >= 2
+            )
+        }
+        item {
+            AchievementItem(
+                title = "Ahorrador de Octanos",
+                desc = "Acumula tus primeros 100 Octanos",
+                isUnlocked = user.octanos >= 100
             )
         }
     }

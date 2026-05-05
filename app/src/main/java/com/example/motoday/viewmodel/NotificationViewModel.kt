@@ -25,6 +25,12 @@ class NotificationViewModel(application: Application) : AndroidViewModel(applica
     private val _unreadMessagesPerGroup = MutableStateFlow<Map<String, Int>>(emptyMap())
     val unreadMessagesPerGroup: StateFlow<Map<String, Int>> = _unreadMessagesPerGroup.asStateFlow()
 
+    private val _unreadMessagesPerConversation = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val unreadMessagesPerConversation: StateFlow<Map<String, Int>> = _unreadMessagesPerConversation.asStateFlow()
+
+    private val _profileNotifications = MutableStateFlow(0)
+    val profileNotifications: StateFlow<Int> = _profileNotifications.asStateFlow()
+
     private val _storeNotifications = MutableStateFlow(0)
     val storeNotifications: StateFlow<Int> = _storeNotifications.asStateFlow()
 
@@ -83,10 +89,12 @@ class NotificationViewModel(application: Application) : AndroidViewModel(applica
                 // Obtenemos los conteos actualizados desde Appwrite
                 val privateCount = appwriteManager.getUnreadPrivateMessagesCount(userId)
                 val unreadPerGroup = appwriteManager.getUnreadMessagesPerGroup(userId)
+                val unreadPerConversation = appwriteManager.getUnreadMessagesPerConversation(userId)
                 val groupsCount = unreadPerGroup.values.sum()
                 
                 _unreadPrivateMessages.value = privateCount
                 _unreadMessagesPerGroup.value = unreadPerGroup
+                _unreadMessagesPerConversation.value = unreadPerConversation
                 _unreadGroupsCount.value = groupsCount
                 
                 Log.d("NotificationVM", "Contadores actualizados: Privados=$privateCount, Grupos=$groupsCount")
@@ -94,6 +102,14 @@ class NotificationViewModel(application: Application) : AndroidViewModel(applica
                 Log.e("NotificationVM", "Error al refrescar notificaciones: ${e.message}")
             }
         }
+    }
+
+    fun notifyNewProfileContent() {
+        _profileNotifications.value += 1
+    }
+
+    fun clearProfileNotifications() {
+        _profileNotifications.value = 0
     }
 
     private fun closeRealtime() {

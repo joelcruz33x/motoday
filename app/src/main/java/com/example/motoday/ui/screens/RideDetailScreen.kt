@@ -32,6 +32,8 @@ import com.example.motoday.data.network.WeatherApiService
 import com.example.motoday.data.network.model.WeatherResponse
 import com.example.motoday.data.remote.AppwriteManager
 import com.example.motoday.data.remote.AuthManager
+import com.example.motoday.viewmodel.NotificationViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 import io.appwrite.services.Realtime
 import kotlinx.coroutines.launch
 import android.location.Geocoder
@@ -44,7 +46,11 @@ import kotlin.math.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RideDetailScreen(navController: NavController, rideId: Int) {
+fun RideDetailScreen(
+    navController: NavController, 
+    rideId: Int,
+    notificationViewModel: NotificationViewModel = viewModel()
+) {
     val context = LocalContext.current
     val db = AppDatabase.getDatabase(context)
     val appwrite = remember { AppwriteManager.getInstance(context) }
@@ -95,12 +101,15 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                                 // EVITAR DOBLE PROCESAMIENTO SI ES EL CREADOR
                                 if (r.creatorId != currentUserId) {
                                     scope.launch {
-                                        appwrite.processRideCompletion(
+                                        val success = appwrite.processRideCompletion(
                                             context = context,
                                             db = db,
                                             ride = r,
                                             userId = currentUserId ?: ""
                                         )
+                                        if (success) {
+                                            notificationViewModel.notifyNewProfileContent()
+                                        }
                                     }
                                 }
                             }
@@ -185,6 +194,25 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(top = 4.dp)
                         )
+
+                        // Gestionado por:
+                        Row(
+                            modifier = Modifier.padding(top = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (currentRide.creatorName.contains(" ") || currentRide.creatorName.length > 15) Icons.Default.Person else Icons.Default.Groups,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = Color.Gray
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Gestionado por: ${currentRide.creatorName}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.Gray
+                            )
+                        }
 
                         if (currentRide.status == "COMPLETED") {
                             Surface(
@@ -457,6 +485,7 @@ fun RideDetailScreen(navController: NavController, rideId: Int) {
                                         if (stampSuccess) {
                                             // 3. Actualizar localmente la ruta
                                             db.rideDao().updateRide(currentRide.copy(status = "COMPLETED"))
+                                            notificationViewModel.notifyNewProfileContent()
                                             Toast.makeText(context, "¡Ruta Finalizada y Sello Creado!", Toast.LENGTH_SHORT).show()
                                         } else {
                                             Toast.makeText(context, "Ruta finalizada (Error al crear sello)", Toast.LENGTH_SHORT).show()
